@@ -1,0 +1,155 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --bg-light: #FDFBF7;
+    --bg-dark: #121824;
+    --card-light: #FFFFFF;
+    --card-dark: #182232;
+    --border-light: #E2E8F0;
+    --border-dark: #2A384C;
+  }
+
+  html, body {
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  #root {
+    max-width: 100%;
+    min-height: 100vh;
+  }
+
+  html[lang="ar"], html[dir="rtl"] {
+    font-family: 'Tajawal', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  
+  html[lang="en"], html[dir="ltr"] {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Smooth transition for theme switching */
+body {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Custom modern scrollbar for prompts and code blocks */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #121824;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #2a384c;
+  border-radius: 9999px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #ea580c;
+}
+
+/* Light mode scrollbar */
+::-webkit-scrollbar-track {
+  background: #fdfbf7;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #ea580c;
+}
+
+/* Explicit touch & momentum scrolling utilities */
+.touch-scroll-container {
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior-y: contain !important;
+  touch-action: pan-y !important;
+}
+
+/* Responsive & Smart Ad Slot Styling */
+.prombo-ad-slot {
+  width: 100%;
+  max-width: 100%;
+  min-width: 250px;
+  height: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  text-align: center;
+  contain: paint;
+}
+
+.prombo-ad-slot[data-ad-type="skyscraper"] {
+  min-width: 120px;
+}
+
+.prombo-ad-slot img,
+.prombo-ad-slot video,
+.prombo-ad-slot canvas {
+  max-width: 100% !important;
+  height: auto !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  display: block;
+  object-fit: contain;
+}
+
+.prombo-ad-slot iframe {
+  max-width: 100% !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.prombo-ad-slot iframe::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.prombo-ad-slot ins,
+.prombo-ad-slot ins.adsbygoogle {
+  display: block !important;
+  width: 100% !important;
+  min-width: 250px !important;
+  max-width: 100% !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  overflow: hidden !important;
+}
+
+.prombo-ad-slot[data-ad-type="skyscraper"] ins,
+.prombo-ad-slot[data-ad-type="skyscraper"] ins.adsbygoogle {
+  min-width: 120px !important;
+}
+
+.prombo-ad-slot a {
+  display: inline-flex;
+  max-width: 100%;
+  justify-content: center;
+  align-items: center;
+}
+
+
+

@@ -1,0 +1,32 @@
+{
+  "id": "/",
+  "name": "Prombo - AI Prompt Engineering Platform",
+  "short_name": "Prombo",
+  "description": "Discover, build, and deploy production-ready AI prompts for Vibe Coding, AI Images, Videos, and Creative Copywriting.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0B132B",
+  "theme_color": "#0B132B",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png?v=3",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png?v=3",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/maskable-icon-512.png?v=3",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

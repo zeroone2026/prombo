@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="10.5 9.5 79 79.5" width="512" height="512">
+  <defs>
+    <linearGradient id="promboOrange" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF6D00" />
+      <stop offset="100%" stop-color="#FF3D00" />
+    </linearGradient>
+  </defs>
+  <path
+    fill="url(#promboOrange)"
+    fill-rule="evenodd"
+    clip-rule="evenodd"
+    d="M 51 10 C 69.5 10 84 24.5 84 44 C 84 63.5 70 78 52 78 C 44.5 78 39.5 74 37 67 C 36.5 73.5 34.5 81 31 85.5 C 27.5 89.8 21.5 90.2 18 86 C 16 83.5 16 76 16 66 L 16 44 C 16 25 31.5 10 51 10 Z M 51 22 C 38 22 28.5 31.5 28.5 44 C 28.5 56.5 38 66 51 66 C 63.5 66 72 56.5 72 44 C 72 31.5 63.5 22 51 22 Z"
+  />
+  <path
+    fill="url(#promboOrange)"
+    d="M 63 44.5 L 44 63.5 L 36 55.5 L 47 44.5 L 36 33.5 L 44 25.5 Z"
+  />
+</svg>

@@ -1,0 +1,8 @@
+{
+  "name": "Prombo - AI Prompt Library",
+  "description": "A streamlined, clutter-free AI prompt repository with multi-language i18n support (AR, EN, FR, ES, ZH, HI, JA), on-demand comment translation, dynamic RTL/LTR layouts, and curated AI prompts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
