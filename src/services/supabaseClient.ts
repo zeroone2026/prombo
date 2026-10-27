@@ -6,9 +6,9 @@ import { isAdminEmail } from '../utils/authUtils';
 const STORAGE_KEY_SUPABASE_URL = 'prombo_supabase_url_v1';
 const STORAGE_KEY_SUPABASE_KEY = 'prombo_supabase_anon_key_v1';
 
-// Default Supabase Environment variables
-const ENV_SUPABASE_URL = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_URL) || (typeof process !== 'undefined' && process.env && process.env.VITE_SUPABASE_URL) || '';
-const ENV_SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_ANON_KEY) || (typeof process !== 'undefined' && process.env && process.env.VITE_SUPABASE_ANON_KEY) || '';
+// Supabase Environment variables read directly from Vite environment
+const ENV_SUPABASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || '';
+const ENV_SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || '';
 
 /**
  * Normalizes user or environment provided Supabase URL to standard project origin.
@@ -144,18 +144,31 @@ export function mapRowToPrompt(row: any): Prompt {
 let cachedClient: SupabaseClient | null = null;
 
 const initialStoredUrl = safeStorage.getItem(STORAGE_KEY_SUPABASE_URL);
-const initialRawUrl = initialStoredUrl || ENV_SUPABASE_URL;
+const initialStoredKey = safeStorage.getItem(STORAGE_KEY_SUPABASE_KEY);
+
+// Purge any legacy placeholder or dummy values (e.g., aBcDe.supabase.co, your-project.supabase.co)
+if (
+  initialStoredUrl &&
+  (initialStoredUrl.toLowerCase().includes('abcde') ||
+    initialStoredUrl.toLowerCase().includes('your-project') ||
+    initialStoredUrl.toLowerCase().includes('example.supabase.co'))
+) {
+  safeStorage.removeItem(STORAGE_KEY_SUPABASE_URL);
+  safeStorage.removeItem(STORAGE_KEY_SUPABASE_KEY);
+}
+
+// Environment variables from import.meta.env take primary precedence over local storage
+const initialRawUrl = ENV_SUPABASE_URL || safeStorage.getItem(STORAGE_KEY_SUPABASE_URL) || '';
 const initialCleanUrl = normalizeSupabaseUrl(initialRawUrl);
 
-const initialStoredKey = safeStorage.getItem(STORAGE_KEY_SUPABASE_KEY);
-const initialRawKey = initialStoredKey || ENV_SUPABASE_ANON_KEY;
+const initialRawKey = ENV_SUPABASE_ANON_KEY || safeStorage.getItem(STORAGE_KEY_SUPABASE_KEY) || '';
 const initialCleanKey = normalizeSupabaseAnonKey(initialRawKey);
 
 // Auto-clean any previously stored malformed URLs in browser storage
-if (initialStoredUrl && initialStoredUrl !== initialCleanUrl) {
+if (initialStoredUrl && initialStoredUrl !== initialCleanUrl && !ENV_SUPABASE_URL) {
   safeStorage.setItem(STORAGE_KEY_SUPABASE_URL, initialCleanUrl);
 }
-if (initialStoredKey && initialStoredKey !== initialCleanKey) {
+if (initialStoredKey && initialStoredKey !== initialCleanKey && !ENV_SUPABASE_ANON_KEY) {
   safeStorage.setItem(STORAGE_KEY_SUPABASE_KEY, initialCleanKey);
 }
 
