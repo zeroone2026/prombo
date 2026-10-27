@@ -8,12 +8,12 @@ import { UserNotificationService } from './userNotificationService';
 import { AuditService } from './auditService';
 import { AuthService } from './authService';
 
-const PROMPTS_STORAGE_KEY = 'prombo_prompts_v1';
-const CATEGORIES_STORAGE_KEY = 'prombo_categories_v1';
-const FAVORITES_STORAGE_KEY = 'prombo_favorites_v1';
-const ADMIN_USER_STORAGE_KEY = 'prombo_admin_user_v1';
-const ADMIN_SESSION_STORAGE_KEY = 'prombo_admin_session_v1';
-const SETTINGS_STORAGE_KEY = 'prombo_platform_settings_v1';
+const PROMPTS_STORAGE_KEY = 'prombo_prompts_v2';
+const CATEGORIES_STORAGE_KEY = 'prombo_categories_v2';
+const FAVORITES_STORAGE_KEY = 'prombo_favorites_v2';
+const ADMIN_USER_STORAGE_KEY = 'prombo_admin_user_v2';
+const ADMIN_SESSION_STORAGE_KEY = 'prombo_admin_session_v2';
+const SETTINGS_STORAGE_KEY = 'prombo_platform_settings_v2';
 const ADS_CONFIG_STORAGE_KEY = 'prombo_ads_engine_v2';
 
 export const DEFAULT_CONTENT_MEDIA_SETTINGS: ContentMediaSettings = {
