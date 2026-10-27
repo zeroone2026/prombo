@@ -23,7 +23,7 @@ import { AuthService } from './services/authService';
 import { SupportService } from './services/supportService';
 import { canDisplayModalAd } from './utils/adsUtils';
 import { isAdminUser, isAdminEmail } from './utils/authUtils';
-import { getSupabaseClient } from './services/supabaseClient';
+import { getSupabaseClient, isSupabaseConfigured } from './services/supabaseClient';
 import { SoundNotificationService } from './services/soundNotificationService';
 import { BrowserNotificationService } from './services/browserNotificationService';
 import { updateDocumentMetadata } from './utils/seoUtils';
@@ -282,6 +282,23 @@ function MainApp() {
   useEffect(() => {
     SoundNotificationService.init();
     BrowserNotificationService.initFirstInteractionPermissionRequest();
+  }, []);
+
+  // Synchronize authentic state from Supabase on mount when connected
+  useEffect(() => {
+    if (isSupabaseConfigured()) {
+      StorageService.fetchPrompts().then((remotePrompts) => {
+        if (remotePrompts && Array.isArray(remotePrompts)) {
+          setPrompts(remotePrompts);
+        }
+      }).catch(() => {});
+
+      StorageService.fetchCategories().then((remoteCategories) => {
+        if (remoteCategories && Array.isArray(remoteCategories)) {
+          setCategories(remoteCategories);
+        }
+      }).catch(() => {});
+    }
   }, []);
 
   // Listen to auth & profile changes and realtime prompts updates
@@ -1594,4 +1611,3 @@ export default function App() {
     </AppProvider>
   );
 }
-
