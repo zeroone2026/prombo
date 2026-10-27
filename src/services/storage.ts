@@ -296,15 +296,31 @@ export const StorageService = {
     try {
       const stored = safeStorage.getItem(PROMPTS_STORAGE_KEY);
       if (stored) {
-        return JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
       }
-      // Seed default
-      safeStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(INITIAL_PROMPTS));
-      return INITIAL_PROMPTS;
+      return [];
     } catch (e) {
       console.warn('Failed to read prompts from storage:', e);
-      return INITIAL_PROMPTS;
+      return [];
     }
+  },
+
+  async fetchPrompts(): Promise<Prompt[]> {
+    if (isSupabaseConfigured()) {
+      try {
+        const remote = await SupabaseDbService.getPrompts();
+        if (remote && Array.isArray(remote)) {
+          safeStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(remote));
+          return remote;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch prompts from Supabase:', err);
+      }
+    }
+    return this.getPrompts();
   },
 
   addPrompt(prompt: Partial<Prompt>): Prompt {
@@ -725,14 +741,31 @@ export const StorageService = {
     try {
       const stored = safeStorage.getItem(CATEGORIES_STORAGE_KEY);
       if (stored) {
-        return JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
       }
-      safeStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(INITIAL_CATEGORIES));
-      return INITIAL_CATEGORIES;
+      return [];
     } catch (e) {
       console.warn('Failed to read categories from storage:', e);
-      return INITIAL_CATEGORIES;
+      return [];
     }
+  },
+
+  async fetchCategories(): Promise<Category[]> {
+    if (isSupabaseConfigured()) {
+      try {
+        const remote = await SupabaseDbService.getCategories();
+        if (remote && Array.isArray(remote)) {
+          safeStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(remote));
+          return remote;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch categories from Supabase:', err);
+      }
+    }
+    return this.getCategories();
   },
 
   saveCategory(category: Partial<Category>): Category {
@@ -1395,4 +1428,3 @@ export const StorageService = {
     safeStorage.removeItem(FAVORITES_STORAGE_KEY);
   }
 };
-
