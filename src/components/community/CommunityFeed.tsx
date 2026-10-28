@@ -313,7 +313,15 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
 
   useEffect(() => {
     AnalyticsService.trackCommunityView('community_feed');
+    
+    // 1. Initial fetch from Supabase
     loadPosts();
+
+    // 2. Subscribe to realtime live updates via postgres_changes
+    const unsubscribeRealtime = StorageService.subscribeToCommunityPosts((updatedPosts) => {
+      setPosts(updatedPosts);
+      setIsLoading(false);
+    });
 
     const handleAuth = (e: any) => {
       setCurrentUser(e.detail);
@@ -353,6 +361,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     const handleCommunityPostsChange = (e: any) => {
       if (e.detail && Array.isArray(e.detail)) {
         setPosts(e.detail);
+        setIsLoading(false);
       } else {
         loadPosts();
       }
@@ -398,6 +407,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     window.addEventListener('prombo_post_created', loadPosts);
 
     return () => {
+      unsubscribeRealtime();
       window.removeEventListener('prombo_auth_change', handleAuth);
       window.removeEventListener('prombo_community_posts_change', handleCommunityPostsChange);
       window.removeEventListener('prombo_user_profile_update', handleUserProfileUpdate);
@@ -487,7 +497,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       setIsLoading(true);
     }
     try {
-      const data = await CommunityService.getPosts();
+      const data = await StorageService.fetchCommunityPosts();
       setPosts(data);
     } catch (err) {
       console.warn('Error fetching posts:', err);
