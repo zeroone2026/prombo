@@ -258,6 +258,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
   }, []);
 
+  // Real-time synchronization using Supabase Realtime for community posts & submissions
+  useEffect(() => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+
+    const channel = supabase
+      .channel(`admin_dashboard_community_posts_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'community_posts',
+        },
+        () => {
+          // Sync fresh community posts and trigger dashboard refresh
+          StorageService.fetchCommunityPosts().catch(() => {});
+          onRefreshData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [onRefreshData]);
+
   // Filtered prompts for management table
   const filteredPrompts = prompts.filter((p) => {
     const matchesCategory = categoryFilter ? p.categoryId === categoryFilter : true;
