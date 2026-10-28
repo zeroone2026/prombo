@@ -1,4 +1,4 @@
-import { Category, Prompt, AdminUser, PromptStatus, PlatformSettings, AdsEngineConfig, AdSlotId, AdSlotConfig, ContentMediaSettings, SectionMediaConfig, FeedAdSlotConfig } from '../types';
+import { Category, Prompt, AdminUser, PromptStatus, PlatformSettings, AdsEngineConfig, AdSlotId, AdSlotConfig, ContentMediaSettings, SectionMediaConfig, FeedAdSlotConfig, CommunityPost } from '../types';
 import { INITIAL_CATEGORIES, INITIAL_PROMPTS } from '../data/seedData';
 import { hashPassword, verifyPassword, sanitizeUrl, sanitizeAdSnippet, safeStorage } from '../utils/securityUtils';
 import { isAdminEmail } from '../utils/authUtils';
@@ -325,6 +325,129 @@ export const StorageService = {
       }
     }
     return this.getPrompts();
+  },
+
+  /**
+   * Fetch Community Posts from Supabase `community_posts` table and sync to local cache
+   */
+  async fetchCommunityPosts(options?: { promptId?: string }): Promise<CommunityPost[]> {
+    const supabase = getSupabaseClient();
+    if (supabase && isSupabaseConfigured()) {
+      try {
+        let query = supabase
+          .from('community_posts')
+          .select('*')
+          .eq('status', 'active')
+          .order('is_pinned', { ascending: false })
+          .order('created_at', { ascending: false });
+
+        if (options?.promptId) {
+          query = query.eq('prompt_id', options.promptId);
+        }
+
+        const { data, error } = await query;
+        if (!error && data !== null && Array.isArray(data)) {
+          // Get local like status if available
+          let userLikes: Record<string, boolean> = {};
+          try {
+            const storedLikes = safeStorage.getItem('prombo_community_likes_v1');
+            if (storedLikes) userLikes = JSON.parse(storedLikes);
+          } catch {}
+
+          const rawPosts: CommunityPost[] = data.map((r: any) => ({
+            id: r.id,
+            userId: r.user_id || 'anonymous',
+            userName: r.user_name || 'Member',
+            userEmail: r.user_email || undefined,
+            userAvatar: r.user_avatar || undefined,
+            promptId: r.prompt_id || undefined,
+            promptTitle: r.prompt_title || undefined,
+            promptCategory: r.prompt_category || undefined,
+            promptModel: r.prompt_model || undefined,
+            content: r.content,
+            parentId: r.parent_id || null,
+            likesCount: Number(r.likes_count) || 0,
+            repliesCount: Number(r.replies_count) || 0,
+            isPinned: Boolean(r.is_pinned),
+            isLikedByMe: !!userLikes[r.id],
+            status: r.status,
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+            images: Array.isArray(r.images) ? r.images : [],
+            videos: Array.isArray(r.videos) ? r.videos : [],
+            videoUrl: r.video_url || undefined,
+            mediaType: r.media_type || (r.videos?.length || r.video_url ? 'video' : (r.images?.length ? 'image' : 'none')),
+            rejectionReason: r.rejection_reason || undefined,
+            moderatedAt: r.moderated_at || undefined,
+            moderatedBy: r.moderated_by || undefined,
+            replies: [],
+          }));
+
+          const topLevelPosts = rawPosts.filter((p) => !p.parentId);
+          const replies = rawPosts.filter((p) => !!p.parentId);
+
+          topLevelPosts.forEach((parent) => {
+            parent.replies = replies.filter((r) => r.parentId === parent.id);
+          });
+
+          // Sync authentic state into local storage
+          safeStorage.setItem('prombo_community_posts_v1', JSON.stringify(topLevelPosts));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: topLevelPosts }));
+          }
+          return topLevelPosts;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch community posts from Supabase:', err);
+      }
+    }
+
+    // Local storage fallback
+    try {
+      const stored = safeStorage.getItem('prombo_community_posts_v1');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          return options?.promptId ? parsed.filter((p: CommunityPost) => p.promptId === options.promptId) : parsed;
+        }
+      }
+    } catch {}
+    return [];
+  },
+
+  /**
+   * Subscribe to live postgres_changes for community posts
+   */
+  subscribeToCommunityPosts(callback: (posts: CommunityPost[]) => void): () => void {
+    const supabase = getSupabaseClient();
+    if (!supabase || !isSupabaseConfigured()) {
+      return () => {};
+    }
+
+    try {
+      const channel = supabase
+        .channel(`community_posts_realtime_${Date.now()}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'community_posts',
+          },
+          async () => {
+            const updated = await this.fetchCommunityPosts();
+            callback(updated);
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } catch (err) {
+      console.warn('Failed to subscribe to community posts realtime channel:', err);
+      return () => {};
+    }
   },
 
   addPrompt(prompt: Partial<Prompt>): Prompt {
@@ -1024,14 +1147,228 @@ export const StorageService = {
     }
   },
 
+  /**
+   * Fetch Platform Settings from Supabase `platform_settings` (or `system_config`) table
+   */
+  async fetchPlatformSettings(): Promise<PlatformSettings> {
+    const supabase = getSupabaseClient();
+    if (supabase && isSupabaseConfigured()) {
+      try {
+        // 1. Check dedicated platform_settings table
+        const { data: psData, error: psError } = await supabase
+          .from('platform_settings')
+          .select('*')
+          .limit(1);
+
+        if (!psError && psData && psData.length > 0) {
+          const row = psData[0];
+          const raw = row.value || row.settings || row.data || row;
+          const merged: PlatformSettings = {
+            ...DEFAULT_SETTINGS,
+            ...raw,
+            imageUpload: {
+              ...DEFAULT_SETTINGS.imageUpload,
+              ...(raw.imageUpload || {}),
+            },
+            contentMedia: {
+              ...DEFAULT_CONTENT_MEDIA_SETTINGS,
+              ...(raw.contentMedia || {}),
+              homePrompts: {
+                ...DEFAULT_CONTENT_MEDIA_SETTINGS.homePrompts,
+                ...(raw.contentMedia?.homePrompts || {}),
+              },
+              community: {
+                ...DEFAULT_CONTENT_MEDIA_SETTINGS.community,
+                ...(raw.contentMedia?.community || {}),
+              },
+            },
+            appearance: {
+              ...DEFAULT_SETTINGS.appearance,
+              ...(raw.appearance || {}),
+            },
+          };
+          safeStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('prombo_platform_settings_change', { detail: merged }));
+          }
+          return merged;
+        }
+
+        // 2. Fallback to system_config table (key = 'platform_settings')
+        const sysSettings = await SupabaseDbService.getPlatformSettings();
+        if (sysSettings) {
+          const merged: PlatformSettings = {
+            ...DEFAULT_SETTINGS,
+            ...sysSettings,
+            imageUpload: {
+              ...DEFAULT_SETTINGS.imageUpload,
+              ...(sysSettings.imageUpload || {}),
+            },
+            contentMedia: {
+              ...DEFAULT_CONTENT_MEDIA_SETTINGS,
+              ...(sysSettings.contentMedia || {}),
+              homePrompts: {
+                ...DEFAULT_CONTENT_MEDIA_SETTINGS.homePrompts,
+                ...(sysSettings.contentMedia?.homePrompts || {}),
+              },
+              community: {
+                ...DEFAULT_CONTENT_MEDIA_SETTINGS.community,
+                ...(sysSettings.contentMedia?.community || {}),
+              },
+            },
+            appearance: {
+              ...DEFAULT_SETTINGS.appearance,
+              ...(sysSettings.appearance || {}),
+            },
+          };
+          safeStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('prombo_platform_settings_change', { detail: merged }));
+          }
+          return merged;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch platform settings from Supabase:', err);
+      }
+    }
+    return this.getPlatformSettings();
+  },
+
   updatePlatformSettings(settings: Partial<PlatformSettings>): PlatformSettings {
     const current = this.getPlatformSettings();
-    const updated = { ...current, ...settings };
+    const updated: PlatformSettings = {
+      ...current,
+      ...settings,
+      imageUpload: {
+        ...current.imageUpload,
+        ...(settings.imageUpload || {}),
+      },
+      contentMedia: {
+        ...current.contentMedia,
+        ...(settings.contentMedia || {}),
+        homePrompts: {
+          ...current.contentMedia?.homePrompts,
+          ...(settings.contentMedia?.homePrompts || {}),
+        },
+        community: {
+          ...current.contentMedia?.community,
+          ...(settings.contentMedia?.community || {}),
+        },
+      },
+      appearance: {
+        ...current.appearance,
+        ...(settings.appearance || {}),
+      },
+    };
+
     safeStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(updated));
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('prombo_platform_settings_change', { detail: updated }));
+    }
+
     if (isSupabaseConfigured()) {
-      SupabaseDbService.savePlatformSettings(updated).catch((e) => console.warn('Supabase sync warning [savePlatformSettings]:', e));
+      const supabase = getSupabaseClient();
+      if (supabase) {
+        // Upsert to platform_settings table
+        (async () => {
+            try {
+              const { error } = await supabase
+                .from('platform_settings')
+                .upsert(
+                  [
+                    {
+                      id: 'global',
+                      key: 'platform_settings',
+                      value: updated,
+                      settings: updated,
+                      updated_at: new Date().toISOString(),
+                    },
+                  ],
+                  { onConflict: 'id' }
+                );
+
+              if (error) {
+                // Fallback to system_config table
+                await SupabaseDbService.savePlatformSettings(updated).catch(() => {});
+              }
+            } catch {
+              await SupabaseDbService.savePlatformSettings(updated).catch(() => {});
+            }
+          })();
+      }
     }
     return updated;
+  },
+
+  /**
+   * Subscribe to live postgres_changes for platform settings
+   */
+  subscribeToPlatformSettings(callback: (settings: PlatformSettings) => void): () => void {
+    const supabase = getSupabaseClient();
+
+    // Local in-browser event listener
+    const localHandler = (e: any) => {
+      if (e.detail) {
+        callback(e.detail);
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('prombo_platform_settings_change', localHandler);
+    }
+
+    if (!supabase || !isSupabaseConfigured()) {
+      return () => {
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('prombo_platform_settings_change', localHandler);
+        }
+      };
+    }
+
+    try {
+      const channel = supabase
+        .channel(`platform_settings_realtime_${Date.now()}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'platform_settings',
+          },
+          async () => {
+            const updated = await this.fetchPlatformSettings();
+            callback(updated);
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'system_config',
+            filter: 'key=eq.platform_settings',
+          },
+          async () => {
+            const updated = await this.fetchPlatformSettings();
+            callback(updated);
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('prombo_platform_settings_change', localHandler);
+        }
+      };
+    } catch (err) {
+      console.warn('Failed to subscribe to platform settings realtime channel:', err);
+      return () => {
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('prombo_platform_settings_change', localHandler);
+        }
+      };
+    }
   },
 
   // CONTENT & MEDIA SETTINGS
