@@ -336,6 +336,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
   }, []);
 
+  // Version counter to force re-render and re-read from storage across all admin tabs
+  const [adminSyncVersion, setAdminSyncVersion] = useState<number>(0);
+
   // Real-time synchronization using Supabase Realtime for community posts & submissions
   useEffect(() => {
     // Initial fetch of pending submissions on mount
@@ -353,14 +356,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           schema: 'public',
           table: 'community_posts',
         },
-        async (_payload) => {
+        async (payload) => {
           // 1. Directly query Supabase for latest pending posts/submissions instantly
           await fetchPendingCommunitySubmissions();
 
           // 2. Also fetch all active community posts to update local storage cache & broadcast
           StorageService.fetchCommunityPosts().catch(() => {});
 
-          // 3. Trigger parent dashboard refresh to keep prompts/counts in sync
+          // 3. State version increment that forces all admin tabs to immediately re-read from storage & re-render
+          setAdminSyncVersion((v) => v + 1);
+
+          // 4. Dispatch global window custom events so all admin tabs immediately re-read from storage
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(
+              new CustomEvent('prombo_admin_realtime_sync', {
+                detail: { timestamp: Date.now(), payload },
+              })
+            );
+            window.dispatchEvent(new CustomEvent('prombo_community_posts_change'));
+            window.dispatchEvent(new CustomEvent('prombo_post_created'));
+          }
+
+          // 5. Trigger parent dashboard refresh to keep prompts/counts in sync
           onRefreshData();
         }
       )
@@ -1219,6 +1236,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab Content: Content & Media Management */}
         {activeTab === 'content-media' && (
           <ContentMediaTab
+            key={`content-media-${adminSyncVersion}`}
             prompts={prompts}
             onRefreshData={onRefreshData}
             onShowToast={onShowToast}
@@ -1228,6 +1246,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab 2 Content: Analytics & Community Control */}
         {activeTab === 'analytics' && (
           <AdminAnalyticsTab
+            key={`analytics-${adminSyncVersion}`}
             siteSettings={siteSettings}
             onUpdateSiteSettings={onUpdateSiteSettings}
             onShowToast={onShowToast}
@@ -1237,6 +1256,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab 3 Content: Community Submissions & Moderation Dashboard */}
         {activeTab === 'moderation' && (
           <AdminModerationTab
+            key={`moderation-${adminSyncVersion}`}
             prompts={prompts}
             categories={categories}
             onRefreshData={onRefreshData}
@@ -1253,6 +1273,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab: Users & Moderation */}
         {activeTab === 'users' && (
           <AdminUsersTab
+            key={`users-${adminSyncVersion}`}
             onShowToast={onShowToast}
             onOpenSupportWithUser={() => {
               setActiveTab('support');
@@ -1263,6 +1284,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab: Reports & Moderation Queue */}
         {activeTab === 'reports' && (
           <AdminReportsSection
+            key={`reports-${adminSyncVersion}`}
             onShowToast={onShowToast}
             onRefreshParent={onRefreshData}
           />
@@ -1271,6 +1293,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab: Centralized Audit Log & Monitoring */}
         {activeTab === 'audit' && (
           <AdminAuditLogSection
+            key={`audit-${adminSyncVersion}`}
             onShowToast={onShowToast}
           />
         )}
@@ -1278,6 +1301,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab 4 Content: Categories Management */}
         {activeTab === 'categories' && (
           <AdminCategoryManager
+            key={`categories-${adminSyncVersion}`}
             categories={categories}
             prompts={prompts}
             onAddCategory={() => {
@@ -1297,6 +1321,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab: Site Appearance (مظهر الموقع) */}
         {activeTab === 'appearance' && (
           <AdminAppearanceTab
+            key={`appearance-${adminSyncVersion}`}
             onRefreshData={onRefreshData}
             onShowToast={onShowToast}
           />
@@ -1305,6 +1330,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab 4 Content: Ad Monetization Engine */}
         {activeTab === 'ads' && (
           <AdsManager
+            key={`ads-${adminSyncVersion}`}
             adsConfig={adsConfig}
             onSaveConfig={(newCfg) => {
               StorageService.saveAdsConfig(newCfg);
