@@ -134,6 +134,21 @@ export const ContentMediaTab: React.FC<ContentMediaTabProps> = ({
     return () => window.removeEventListener('prombo_content_media_settings_changed', handleSettingsChanged);
   }, []);
 
+  // Listen for admin real-time sync events to immediately re-read from storage
+  useEffect(() => {
+    const handleRealtimeSync = () => {
+      refreshData();
+    };
+    window.addEventListener('prombo_admin_realtime_sync', handleRealtimeSync);
+    window.addEventListener('prombo_community_posts_change', handleRealtimeSync);
+    window.addEventListener('prombo_post_created', handleRealtimeSync);
+    return () => {
+      window.removeEventListener('prombo_admin_realtime_sync', handleRealtimeSync);
+      window.removeEventListener('prombo_community_posts_change', handleRealtimeSync);
+      window.removeEventListener('prombo_post_created', handleRealtimeSync);
+    };
+  }, []);
+
   // Compute Pending Queue (Prompts with pending status OR community posts with pending status)
   const pendingPrompts = useMemo(() => {
     return prompts.filter((p) => p.status === 'pending');
