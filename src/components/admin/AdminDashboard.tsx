@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'motion/react';
 import {
   Code2,
@@ -38,8 +38,9 @@ import {
   Film,
   Palette,
 } from 'lucide-react';
-import { Prompt, Category, PromptStatus, AdsEngineConfig, SiteSettings } from '../../types';
+import { Prompt, Category, PromptStatus, AdsEngineConfig, SiteSettings, CommunityPost } from '../../types';
 import { StorageService } from '../../services/storage';
+import { CommunityService } from '../../services/communityService';
 import { AuthService } from '../../services/authService';
 import { ReportService } from '../../services/reportService';
 import { SupportService } from '../../services/supportService';
@@ -232,8 +233,85 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [accountMsg, setAccountMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Pending count for moderation badge
-  const pendingCount = prompts.filter((p) => p.status === 'pending').length;
+  // Pending community posts / submissions state
+  const [pendingCommunityPosts, setPendingCommunityPosts] = useState<CommunityPost[]>(() => {
+    return CommunityService.getPendingPosts();
+  });
+  const [pendingCommunityCount, setPendingCommunityCount] = useState<number>(() => {
+    return CommunityService.getPendingPosts().length;
+  });
+
+  // Direct internal fetch for pending community posts & submissions from Supabase
+  const fetchPendingCommunitySubmissions = useCallback(async () => {
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('community_posts')
+          .select('*')
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false });
+
+        if (!error && data !== null && Array.isArray(data)) {
+          const formatted: CommunityPost[] = data.map((r: any) => ({
+            id: r.id,
+            userId: r.user_id || 'anonymous',
+            userName: r.user_name || 'Member',
+            userEmail: r.user_email || undefined,
+            userAvatar: r.user_avatar || undefined,
+            promptId: r.prompt_id || undefined,
+            promptTitle: r.prompt_title || undefined,
+            promptCategory: r.prompt_category || undefined,
+            promptModel: r.prompt_model || undefined,
+            content: r.content,
+            parentId: r.parent_id || null,
+            likesCount: Number(r.likes_count) || 0,
+            repliesCount: Number(r.replies_count) || 0,
+            isPinned: Boolean(r.is_pinned),
+            isLikedByMe: false,
+            status: r.status,
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+            images: Array.isArray(r.images) ? r.images : [],
+            videos: Array.isArray(r.videos) ? r.videos : [],
+            videoUrl: r.video_url || undefined,
+            mediaType: r.media_type || (r.videos?.length || r.video_url ? 'video' : (r.images?.length ? 'image' : 'none')),
+            rejectionReason: r.rejection_reason || undefined,
+            moderatedAt: r.moderated_at || undefined,
+            moderatedBy: r.moderated_by || undefined,
+            replies: [],
+          }));
+
+          setPendingCommunityPosts(formatted);
+          setPendingCommunityCount(formatted.length);
+
+          // Update local cache and notify child components/tabs
+          const currentLocal = CommunityService.getLocalPosts();
+          const localMap = new Map(currentLocal.map((p) => [p.id, p]));
+          formatted.forEach((p) => localMap.set(p.id, { ...(localMap.get(p.id) || {}), ...p }));
+          const merged = Array.from(localMap.values());
+          CommunityService.saveLocalPosts(merged);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: merged }));
+            window.dispatchEvent(new CustomEvent('prombo_post_created'));
+          }
+          return formatted;
+        }
+      } catch (err) {
+        console.warn('Error fetching pending community submissions directly from Supabase:', err);
+      }
+    }
+
+    // Local fallback
+    const localPending = CommunityService.getPendingPosts();
+    setPendingCommunityPosts(localPending);
+    setPendingCommunityCount(localPending.length);
+    return localPending;
+  }, []);
+
+  // Pending count for moderation badge (combines pending prompts and pending community posts)
+  const pendingPromptsCount = prompts.filter((p) => p.status === 'pending').length;
+  const pendingCount = pendingPromptsCount + pendingCommunityCount;
 
   // Pending count for reports badge
   const [pendingReportsCount, setPendingReportsCount] = useState<number>(() => {
@@ -260,6 +338,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Real-time synchronization using Supabase Realtime for community posts & submissions
   useEffect(() => {
+    // Initial fetch of pending submissions on mount
+    fetchPendingCommunitySubmissions();
+
     const supabase = getSupabaseClient();
     if (!supabase) return;
 
@@ -272,9 +353,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           schema: 'public',
           table: 'community_posts',
         },
-        () => {
-          // Sync fresh community posts and trigger dashboard refresh
+        async (_payload) => {
+          // 1. Directly query Supabase for latest pending posts/submissions instantly
+          await fetchPendingCommunitySubmissions();
+
+          // 2. Also fetch all active community posts to update local storage cache & broadcast
           StorageService.fetchCommunityPosts().catch(() => {});
+
+          // 3. Trigger parent dashboard refresh to keep prompts/counts in sync
           onRefreshData();
         }
       )
@@ -283,7 +369,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [onRefreshData]);
+  }, [fetchPendingCommunitySubmissions, onRefreshData]);
 
   // Filtered prompts for management table
   const filteredPrompts = prompts.filter((p) => {
@@ -759,6 +845,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           >
             <Film className="w-4 h-4" />
             <span>{language === 'ar' ? 'المحتوى والميديا' : 'Content & Media'}</span>
+            {pendingCommunityCount > 0 && (
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                activeTab === 'content-media' ? 'bg-white text-orange-600' : 'bg-orange-600 text-white'
+              }`}>
+                {pendingCommunityCount}
+              </span>
+            )}
           </button>
 
           {/* Tab 2: Analytics & Community Control */}
