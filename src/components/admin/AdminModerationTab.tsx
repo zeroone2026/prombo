@@ -64,8 +64,34 @@ export const AdminModerationTab: React.FC<AdminModerationTabProps> = ({
   const [settings, setSettings] = useState<PlatformSettings>(() => StorageService.getPlatformSettings());
 
   useEffect(() => {
-    setSettings(StorageService.getPlatformSettings());
-  }, [prompts]);
+    // Fetch latest settings from Supabase
+    StorageService.fetchPlatformSettings().then((latest) => {
+      if (latest) setSettings(latest);
+    }).catch(() => {});
+
+    // Subscribe to realtime settings updates
+    const unsubscribe = StorageService.subscribeToPlatformSettings((latest) => {
+      setSettings(latest);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // Listen to admin realtime sync event to immediately re-read platform settings and refresh data
+  useEffect(() => {
+    const handleRealtimeSync = () => {
+      setSettings(StorageService.getPlatformSettings());
+      onRefreshData();
+    };
+    window.addEventListener('prombo_admin_realtime_sync', handleRealtimeSync);
+    window.addEventListener('prombo_community_posts_change', handleRealtimeSync);
+    return () => {
+      window.removeEventListener('prombo_admin_realtime_sync', handleRealtimeSync);
+      window.removeEventListener('prombo_community_posts_change', handleRealtimeSync);
+    };
+  }, [onRefreshData]);
 
   const currentImageConfig = settings.imageUpload || {
     masterEnabled: true,
