@@ -8,12 +8,12 @@ import { UserNotificationService } from './userNotificationService';
 import { AuditService } from './auditService';
 import { AuthService } from './authService';
 
-const PROMPTS_STORAGE_KEY = 'prombo_prompts_v2';
-const CATEGORIES_STORAGE_KEY = 'prombo_categories_v2';
-const FAVORITES_STORAGE_KEY = 'prombo_favorites_v2';
-const ADMIN_USER_STORAGE_KEY = 'prombo_admin_user_v2';
-const ADMIN_SESSION_STORAGE_KEY = 'prombo_admin_session_v2';
-const SETTINGS_STORAGE_KEY = 'prombo_platform_settings_v2';
+const PROMPTS_STORAGE_KEY = 'prombo_prompts_v1';
+const CATEGORIES_STORAGE_KEY = 'prombo_categories_v1';
+const FAVORITES_STORAGE_KEY = 'prombo_favorites_v1';
+const ADMIN_USER_STORAGE_KEY = 'prombo_admin_user_v1';
+const ADMIN_SESSION_STORAGE_KEY = 'prombo_admin_session_v1';
+const SETTINGS_STORAGE_KEY = 'prombo_platform_settings_v1';
 const ADS_CONFIG_STORAGE_KEY = 'prombo_ads_engine_v2';
 
 export const DEFAULT_CONTENT_MEDIA_SETTINGS: ContentMediaSettings = {
@@ -312,8 +312,12 @@ export const StorageService = {
     if (isSupabaseConfigured()) {
       try {
         const remote = await SupabaseDbService.getPrompts();
-        if (remote && Array.isArray(remote)) {
+        if (remote !== null && Array.isArray(remote)) {
+          // Immediately synchronize authentic Supabase database state into local storage
           safeStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(remote));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('prombo_prompts_change', { detail: remote }));
+          }
           return remote;
         }
       } catch (err) {
@@ -754,12 +758,35 @@ export const StorageService = {
   },
 
   async fetchCategories(): Promise<Category[]> {
-    if (isSupabaseConfigured()) {
+    const supabase = getSupabaseClient();
+    if (supabase && isSupabaseConfigured()) {
       try {
-        const remote = await SupabaseDbService.getCategories();
-        if (remote && Array.isArray(remote)) {
-          safeStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(remote));
-          return remote;
+        const { data, error } = await supabase
+          .from('categories')
+          .select('*')
+          .order('order_num', { ascending: true });
+
+        if (!error && data !== null && Array.isArray(data)) {
+          const remoteCategories: Category[] = data.map((row: any) => ({
+            id: row.id,
+            name: row.name,
+            nameAr: row.name_ar,
+            slug: row.slug,
+            description: row.description || '',
+            descriptionAr: row.description_ar,
+            icon: row.icon || 'Bookmark',
+            color: row.color || '#38bdf8',
+            badgeBg: row.badge_bg || 'bg-sky-500/10 text-sky-400',
+            badgeBorder: row.badge_border || 'border-sky-500/30',
+            order: row.order_num ?? row.order ?? 0,
+          }));
+
+          // Immediately synchronize authentic Supabase database state into local storage
+          safeStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(remoteCategories));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('prombo_categories_change', { detail: remoteCategories }));
+          }
+          return remoteCategories;
         }
       } catch (err) {
         console.warn('Failed to fetch categories from Supabase:', err);
