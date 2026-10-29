@@ -319,7 +319,30 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
 
     // 2. Subscribe to realtime live updates via postgres_changes
     const unsubscribeRealtime = StorageService.subscribeToCommunityPosts((updatedPosts) => {
-      setPosts(updatedPosts);
+      setPosts((prevPosts) => {
+        // If there are pending optimistic replies/posts in prevPosts that aren't yet in updatedPosts, preserve them
+        const hasPendingOptimistic = prevPosts.some(
+          (p) => p.id.startsWith('temp_') || (p.replies && p.replies.some((r) => r.id.startsWith('temp_')))
+        );
+
+        if (!hasPendingOptimistic) {
+          return updatedPosts;
+        }
+
+        return updatedPosts.map((post) => {
+          const matchingPrev = prevPosts.find((p) => p.id === post.id);
+          const pendingReplies = (matchingPrev?.replies || []).filter((r) => r.id.startsWith('temp_'));
+          if (pendingReplies.length > 0) {
+            const currentReplies = post.replies || [];
+            return {
+              ...post,
+              repliesCount: Math.max(post.repliesCount || 0, currentReplies.length + pendingReplies.length),
+              replies: [...currentReplies, ...pendingReplies],
+            };
+          }
+          return post;
+        });
+      });
       setIsLoading(false);
     });
 
@@ -401,17 +424,131 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       }
     };
 
+    const handlePostCreated = (e: any) => {
+      const newPost: CommunityPost = e.detail;
+      if (!newPost || !newPost.id) {
+        loadPosts();
+        return;
+      }
+
+      setPosts((prevPosts) => {
+        // Nested reply
+        if (newPost.parentId) {
+          return prevPosts.map((p) => {
+            if (p.id === newPost.parentId) {
+              const currentReplies = p.replies || [];
+              const exists = currentReplies.some((r) => r.id === newPost.id);
+              const updatedReplies = exists
+                ? currentReplies.map((r) => (r.id === newPost.id ? newPost : r))
+                : [...currentReplies, newPost];
+              return {
+                ...p,
+                repliesCount: Math.max((p.repliesCount || 0) + (exists ? 0 : 1), updatedReplies.length),
+                replies: updatedReplies,
+              };
+            }
+            return p;
+          });
+        }
+
+        // Top-level post
+        if (prevPosts.some((p) => p.id === newPost.id)) {
+          return prevPosts.map((p) => (p.id === newPost.id ? { ...p, ...newPost } : p));
+        }
+        return [newPost, ...prevPosts];
+      });
+    };
+
+    const handlePostLiked = (e: any) => {
+      const { postId, isLiked, newLikesCount } = e.detail || {};
+      if (!postId) return;
+
+      setPosts((prevPosts) =>
+        prevPosts.map((post) => {
+          if (post.id === postId) {
+            return {
+              ...post,
+              isLikedByMe: isLiked !== undefined ? isLiked : post.isLikedByMe,
+              likesCount: newLikesCount !== undefined ? newLikesCount : post.likesCount,
+            };
+          }
+          if (post.replies && post.replies.some((r) => r.id === postId)) {
+            return {
+              ...post,
+              replies: post.replies.map((r) =>
+                r.id === postId
+                  ? {
+                      ...r,
+                      isLikedByMe: isLiked !== undefined ? isLiked : r.isLikedByMe,
+                      likesCount: newLikesCount !== undefined ? newLikesCount : r.likesCount,
+                    }
+                  : r
+              ),
+            };
+          }
+          return post;
+        })
+      );
+    };
+
+    const handlePostUpdated = (e: any) => {
+      const updatedPost: CommunityPost = e.detail;
+      if (!updatedPost || !updatedPost.id) return;
+
+      setPosts((prevPosts) =>
+        prevPosts.map((post) => {
+          if (post.id === updatedPost.id) {
+            return { ...post, ...updatedPost, replies: post.replies || updatedPost.replies };
+          }
+          if (post.replies && post.replies.some((r) => r.id === updatedPost.id)) {
+            return {
+              ...post,
+              replies: post.replies.map((r) => (r.id === updatedPost.id ? { ...r, ...updatedPost } : r)),
+            };
+          }
+          return post;
+        })
+      );
+    };
+
+    const handlePostDeleted = (e: any) => {
+      const deletedId = e.detail?.postId || e.detail;
+      if (!deletedId) return;
+
+      setPosts((prevPosts) =>
+        prevPosts
+          .filter((p) => p.id !== deletedId)
+          .map((post) => {
+            if (post.replies && post.replies.some((r) => r.id === deletedId)) {
+              const updatedReplies = post.replies.filter((r) => r.id !== deletedId);
+              return {
+                ...post,
+                repliesCount: Math.max(0, updatedReplies.length),
+                replies: updatedReplies,
+              };
+            }
+            return post;
+          })
+      );
+    };
+
     window.addEventListener('prombo_auth_change', handleAuth);
     window.addEventListener('prombo_community_posts_change', handleCommunityPostsChange);
     window.addEventListener('prombo_user_profile_update', handleUserProfileUpdate);
-    window.addEventListener('prombo_post_created', loadPosts);
+    window.addEventListener('prombo_post_created', handlePostCreated);
+    window.addEventListener('prombo_post_liked', handlePostLiked);
+    window.addEventListener('prombo_post_updated', handlePostUpdated);
+    window.addEventListener('prombo_post_deleted', handlePostDeleted);
 
     return () => {
       unsubscribeRealtime();
       window.removeEventListener('prombo_auth_change', handleAuth);
       window.removeEventListener('prombo_community_posts_change', handleCommunityPostsChange);
       window.removeEventListener('prombo_user_profile_update', handleUserProfileUpdate);
-      window.removeEventListener('prombo_post_created', loadPosts);
+      window.removeEventListener('prombo_post_created', handlePostCreated);
+      window.removeEventListener('prombo_post_liked', handlePostLiked);
+      window.removeEventListener('prombo_post_updated', handlePostUpdated);
+      window.removeEventListener('prombo_post_deleted', handlePostDeleted);
     };
   }, []);
 
@@ -604,16 +741,20 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
         mediaType,
       });
 
-      // Prepend to posts locally only if active/published
+      // Prepend to posts locally so user immediately sees their contribution
+      setPosts((prev) => {
+        if (prev.some((p) => p.id === createdPost.id)) return prev;
+        return [createdPost, ...prev];
+      });
+
       if (createdPost.status === 'pending') {
         onShowToast(
           language === 'ar'
-            ? 'تم إرسال مشاركتك بانتظار موافقة الإدارة قبل النشر العلني.'
-            : 'Your post was submitted for admin review before publication.',
+            ? 'تم إرسال مشاركتك وتظهر لك بانتظار موافقة الإدارة للنشر العام.'
+            : 'Your post was submitted and is visible to you while pending admin review.',
           'info'
         );
       } else {
-        setPosts((prev) => [createdPost, ...prev]);
         onShowToast(language === 'ar' ? 'تم النشر' : (t('toastPromptPublished') || 'Published'), 'success');
       }
       setNewPostContent('');
@@ -855,9 +996,11 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       setPosts((prevPosts) =>
         prevPosts.map((post) => {
           if (post.id === parentId) {
+            const updatedReplies = (post.replies || []).map((r) => (r.id === tempId ? savedReply : r));
             return {
               ...post,
-              replies: (post.replies || []).map((r) => (r.id === tempId ? savedReply : r)),
+              repliesCount: Math.max(Number(post.repliesCount) || 0, updatedReplies.length),
+              replies: updatedReplies,
             };
           }
           return post;
@@ -1783,6 +1926,12 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/30 shrink-0">
                               <Sparkles className="w-2.5 h-2.5" />
                               <span>{t('sponsored')}</span>
+                            </span>
+                          )}
+                          {post.status === 'pending' && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0">
+                              <Clock className="w-2.5 h-2.5" />
+                              <span>{language === 'ar' ? 'قيد المراجعة' : 'Pending Review'}</span>
                             </span>
                           )}
                         </div>
