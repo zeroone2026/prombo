@@ -56,6 +56,24 @@ export function normalizeSupabaseAnonKey(rawKey: string | undefined | null): str
   return String(rawKey).trim().replace(/^['"]|['"]$/g, '').trim();
 }
 
+/**
+ * Validates that an anon key is not empty, dummy, or an incomplete placeholder
+ */
+export function isValidAnonKey(rawKey: string | undefined | null): boolean {
+  if (!rawKey) return false;
+  const key = normalizeSupabaseAnonKey(rawKey);
+  if (!key || key.length < 20) return false;
+  if (
+    key.includes('...') ||
+    key.includes('YOUR_') ||
+    key.includes('MY_KEY') ||
+    key.toLowerCase().includes('placeholder')
+  ) {
+    return false;
+  }
+  return true;
+}
+
 // Storage bucket names as specified in requirements
 export const SUPABASE_STORAGE_BUCKET = 'prompt-images';
 export const SUPABASE_AVATARS_BUCKET = 'avatars';
@@ -178,38 +196,44 @@ let currentConfig = {
 };
 
 /**
- * Initialize or retrieve the active Supabase Client
- */
-export function getSupabaseClient(): SupabaseClient | null {
-  if (cachedClient) return cachedClient;
-
-  const url = normalizeSupabaseUrl(currentConfig.url);
-  const anonKey = normalizeSupabaseAnonKey(currentConfig.anonKey);
-
-  if (url && anonKey && url.startsWith('http')) {
-    try {
-      cachedClient = createClient(url, anonKey, {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-        },
-      });
-      return cachedClient;
-    } catch (err) {
-      console.warn('Failed to initialize Supabase client:', err);
-      return null;
-    }
-  }
-  return null;
-}
-
-/**
  * Check if valid Supabase credentials exist and are configured
  */
 export function isSupabaseConfigured(): boolean {
   const url = normalizeSupabaseUrl(currentConfig.url);
   const anonKey = normalizeSupabaseAnonKey(currentConfig.anonKey);
-  return !!(url && anonKey && url.startsWith('http'));
+  return !!(url && anonKey && url.startsWith('http') && isValidAnonKey(anonKey));
+}
+
+/**
+ * Initialize or retrieve the active Supabase Client
+ */
+export function getSupabaseClient(): SupabaseClient | null {
+  if (cachedClient) return cachedClient;
+
+  if (!isSupabaseConfigured()) {
+    return null;
+  }
+
+  const url = normalizeSupabaseUrl(currentConfig.url);
+  const anonKey = normalizeSupabaseAnonKey(currentConfig.anonKey);
+
+  try {
+    cachedClient = createClient(url, anonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+      },
+      global: {
+        headers: {
+          apikey: anonKey,
+        },
+      },
+    });
+    return cachedClient;
+  } catch (err) {
+    console.warn('Failed to initialize Supabase client:', err);
+    return null;
+  }
 }
 
 /**
