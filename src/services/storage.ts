@@ -337,12 +337,19 @@ export const StorageService = {
         let query = supabase
           .from('community_posts')
           .select('*')
-          .eq('status', 'active')
           .order('is_pinned', { ascending: false })
           .order('created_at', { ascending: false });
 
         if (options?.promptId) {
           query = query.eq('prompt_id', options.promptId);
+        }
+
+        const currentUser = AuthService.getCurrentUser();
+        if (currentUser?.id) {
+          // Fetch active posts, and also pending posts belonging to the current user so they don't vanish
+          query = query.or(`status.eq.active,user_id.eq.${currentUser.id}`);
+        } else {
+          query = query.eq('status', 'active');
         }
 
         const { data, error } = await query;
@@ -387,7 +394,9 @@ export const StorageService = {
           const replies = rawPosts.filter((p) => !!p.parentId);
 
           topLevelPosts.forEach((parent) => {
-            parent.replies = replies.filter((r) => r.parentId === parent.id);
+            const postReplies = replies.filter((r) => r.parentId === parent.id);
+            parent.replies = postReplies;
+            parent.repliesCount = Math.max(Number(parent.repliesCount) || 0, postReplies.length);
           });
 
           // Sync authentic state into local storage
@@ -408,7 +417,11 @@ export const StorageService = {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
-          return options?.promptId ? parsed.filter((p: CommunityPost) => p.promptId === options.promptId) : parsed;
+          const currentUserId = AuthService.getCurrentUser()?.id;
+          const filtered = parsed.filter(
+            (p: CommunityPost) => p.status === 'active' || (p.status === 'pending' && (!currentUserId || p.userId === currentUserId))
+          );
+          return options?.promptId ? filtered.filter((p: CommunityPost) => p.promptId === options.promptId) : filtered;
         }
       }
     } catch {}
