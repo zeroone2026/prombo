@@ -1,7 +1,7 @@
 import { CommunityPost, SiteSettings, CommunityUser } from '../types';
 import { getSupabaseClient } from './supabaseClient';
 import { safeStorage } from '../utils/securityUtils';
-import { DEFAULT_AVATAR_URL } from '../utils/authUtils';
+import { DEFAULT_AVATAR_URL, isAdminUser } from '../utils/authUtils';
 import { AnalyticsService } from './analyticsService';
 import { SoundNotificationService } from './soundNotificationService';
 import { UserNotificationService } from './userNotificationService';
@@ -186,91 +186,30 @@ export const CommunityService = {
    */
   saveLocalPosts(posts: CommunityPost[]): void {
     safeStorage.setItem(POSTS_STORAGE_KEY, JSON.stringify(posts));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: posts }));
+    }
   },
 
   /**
-   * Fetch all Community Posts (Hierarchical with replies)
+   * Fetch all Community Posts (Hierarchical with replies) - delegates to StorageService for unified cache & realtime
    */
   async getPosts(options?: { promptId?: string }): Promise<CommunityPost[]> {
-    const supabase = getSupabaseClient();
-    const userLikes = this.getUserLikes();
+    return StorageService.fetchCommunityPosts(options);
+  },
 
-    if (supabase) {
-      try {
-        let query = supabase
-          .from('community_posts')
-          .select('*')
-          .eq('status', 'active')
-          .order('is_pinned', { ascending: false })
-          .order('created_at', { ascending: false });
+  /**
+   * Alias for fetchCommunityPosts
+   */
+  async fetchCommunityPosts(options?: { promptId?: string }): Promise<CommunityPost[]> {
+    return StorageService.fetchCommunityPosts(options);
+  },
 
-        if (options?.promptId) {
-          query = query.eq('prompt_id', options.promptId);
-        }
-
-        const { data, error } = await query;
-        if (!error && data && data.length > 0) {
-          // Structure nested hierarchy
-          const rawPosts: CommunityPost[] = data.map((r: any) => ({
-            id: r.id,
-            userId: r.user_id || 'anonymous',
-            userName: r.user_name || 'Member',
-            userEmail: r.user_email || undefined,
-            userAvatar: r.user_avatar || undefined,
-            promptId: r.prompt_id || undefined,
-            promptTitle: r.prompt_title || undefined,
-            promptCategory: r.prompt_category || undefined,
-            promptModel: r.prompt_model || undefined,
-            content: r.content,
-            parentId: r.parent_id || null,
-            likesCount: Number(r.likes_count) || 0,
-            repliesCount: Number(r.replies_count) || 0,
-            isPinned: Boolean(r.is_pinned),
-            isLikedByMe: !!userLikes[r.id],
-            status: r.status,
-            createdAt: r.created_at,
-            updatedAt: r.updated_at,
-            images: Array.isArray(r.images) ? r.images : [],
-            videos: Array.isArray(r.videos) ? r.videos : [],
-            videoUrl: r.video_url || undefined,
-            mediaType: r.media_type || (r.videos?.length || r.video_url ? 'video' : (r.images?.length ? 'image' : 'none')),
-            rejectionReason: r.rejection_reason || undefined,
-            moderatedAt: r.moderated_at || undefined,
-            moderatedBy: r.moderated_by || undefined,
-            replies: [],
-          }));
-
-          const topLevelPosts = rawPosts.filter((p) => !p.parentId);
-          const replies = rawPosts.filter((p) => !!p.parentId);
-
-          topLevelPosts.forEach((parent) => {
-            parent.replies = replies.filter((r) => r.parentId === parent.id);
-          });
-
-          return topLevelPosts;
-        }
-      } catch (err) {
-        console.warn('Supabase getPosts failed, using local posts cache', err);
-      }
-    }
-
-    // Local fallback
-    let allPosts = this.getLocalPosts().filter((p) => (p.status === 'active' || !p.status) && p.status !== 'pending' && !p.isArchived);
-    if (options?.promptId) {
-      allPosts = allPosts.filter((p) => p.promptId === options.promptId);
-    }
-
-    // Attach local like status & filter out inactive replies for public view
-    return allPosts.map((post) => ({
-      ...post,
-      isLikedByMe: !!userLikes[post.id],
-      replies: (post.replies || [])
-        .filter((rep) => (rep.status === 'active' || !rep.status) && rep.status !== 'pending' && !rep.isArchived)
-        .map((rep) => ({
-          ...rep,
-          isLikedByMe: !!userLikes[rep.id],
-        })),
-    }));
+  /**
+   * Subscribe to live postgres_changes for community posts
+   */
+  subscribeToCommunityPosts(callback: (posts: CommunityPost[]) => void): () => void {
+    return StorageService.subscribeToCommunityPosts(callback);
   },
 
   /**
@@ -391,7 +330,12 @@ export const CommunityService = {
     const now = new Date().toISOString();
     const newPostId = `post_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-    // Prior moderation check
+    // Prior moderation check:
+    // 1. Admins are automatically approved and published as 'active'.
+    // 2. If prior moderation is disabled, posts publish directly as 'active'.
+    // 3. For members: text discussions publish as 'active' so discussions flow smoothly;
+    //    if prior moderation is enabled AND media is attached, hold for moderation ('pending').
+    const isAdmin = activeSession.role === 'admin' || isAdminUser(activeSession);
     const contentSettings = StorageService.getContentMediaSettings();
     const hasMedia = Boolean(
       (params.images && params.images.length > 0) ||
@@ -399,10 +343,9 @@ export const CommunityService = {
       params.videoUrl
     );
 
-    // If master moderation is enabled and media is attached (or top-level post), set status to pending
-    const initialStatus: 'active' | 'pending' = (contentSettings.priorModerationEnabled && (hasMedia || !params.parentId))
-      ? 'pending'
-      : 'active';
+    const initialStatus: 'active' | 'pending' = (isAdmin || !contentSettings.priorModerationEnabled || !hasMedia)
+      ? 'active'
+      : 'pending';
 
     const newPost: CommunityPost = {
       id: newPostId,
@@ -445,6 +388,10 @@ export const CommunityService = {
       localPosts.unshift(newPost);
     }
     this.saveLocalPosts(localPosts);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: localPosts }));
+      window.dispatchEvent(new CustomEvent('prombo_post_created', { detail: newPost }));
+    }
 
     // 2. Track Analytics Event
     AnalyticsService.trackEvent('comment_created', params.promptId || newPostId, {
@@ -641,6 +588,14 @@ export const CommunityService = {
       if (found) break;
     }
     this.saveLocalPosts(localPosts);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: localPosts }));
+      window.dispatchEvent(
+        new CustomEvent('prombo_post_liked', {
+          detail: { postId, isLiked: newLikedState, newLikesCount: calculatedCount },
+        })
+      );
+    }
 
     // Track like event
     AnalyticsService.trackEvent('like_toggle', postId, { isLiked: newLikedState });
@@ -747,6 +702,10 @@ export const CommunityService = {
 
     if (updatedPost) {
       this.saveLocalPosts(localPosts);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: localPosts }));
+        window.dispatchEvent(new CustomEvent('prombo_post_updated', { detail: updatedPost }));
+      }
 
       const supabase = getSupabaseClient();
       if (supabase) {
@@ -856,6 +815,10 @@ export const CommunityService = {
       }
     });
     this.saveLocalPosts(updatedTop);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: updatedTop }));
+      window.dispatchEvent(new CustomEvent('prombo_post_deleted', { detail: { postId } }));
+    }
 
     const supabase = getSupabaseClient();
     if (supabase) {
@@ -961,6 +924,10 @@ export const CommunityService = {
     post.moderatedAt = new Date().toISOString();
     post.moderatedBy = requestingAdminId || 'admin';
     this.saveLocalPosts(localPosts);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: localPosts }));
+      window.dispatchEvent(new CustomEvent('prombo_post_updated', { detail: post }));
+    }
 
     // Notify post author
     if (post.userId) {
@@ -1023,6 +990,10 @@ export const CommunityService = {
     post.moderatedAt = new Date().toISOString();
     post.moderatedBy = requestingAdminId || 'admin';
     this.saveLocalPosts(localPosts);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: localPosts }));
+      window.dispatchEvent(new CustomEvent('prombo_post_deleted', { detail: { postId } }));
+    }
 
     // Notify post author
     if (post.userId) {
