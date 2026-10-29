@@ -1,9 +1,16 @@
 import { PageAnalyticsEvent, AnalyticsSummary } from '../types';
-import { getSupabaseClient } from './supabaseClient';
+import { getSupabaseClient, isSupabaseConfigured } from './supabaseClient';
 import { safeStorage } from '../utils/securityUtils';
 
 const ANALYTICS_STORAGE_KEY = 'prombo_analytics_events_v1';
 const MAX_LOCAL_EVENTS = 250;
+
+/**
+ * Exact Supabase table name for analytics tracking.
+ * Must be 'page_analytics' (with underscore, strictly no spaces)
+ * to avoid PostgREST HTTP 400 Bad Request errors.
+ */
+export const PAGE_ANALYTICS_TABLE = 'page_analytics';
 
 export const AnalyticsService = {
   /**
@@ -37,7 +44,7 @@ export const AnalyticsService = {
       createdAt: new Date().toISOString(),
     };
 
-    // 1. Store in Local Cache
+    // 1. Store in Local Cache (Always safe and immediate)
     try {
       const existing = this.getLocalEvents();
       const updated = [event, ...existing].slice(0, MAX_LOCAL_EVENTS);
@@ -46,18 +53,31 @@ export const AnalyticsService = {
       console.warn('Failed to save local analytics event', e);
     }
 
-    // 2. Sync to Supabase `page_analytics`
+    // 2. Sync to Supabase `page_analytics` ONLY if Supabase is properly configured with a valid API key
+    if (!isSupabaseConfigured()) {
+      return;
+    }
+
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('page_analytics').insert([
-          {
-            event_type: eventType,
-            entity_id: entityId || null,
-            metadata,
-            user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+        // Build insert payload using strictly valid column identifiers without spaces
+        const insertPayload: Record<string, any> = {
+          event_type: eventType,
+          entity_id: entityId || null,
+          metadata: {
+            ...(metadata || {}),
+            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
           },
-        ]);
+        };
+
+        const { error } = await supabase
+          .from(PAGE_ANALYTICS_TABLE)
+          .insert([insertPayload]);
+
+        if (error && import.meta.env.DEV) {
+          console.debug('Analytics sync to Supabase notice:', error.message);
+        }
       } catch (err) {
         if (import.meta.env.DEV) {
           console.debug('Analytics sync to Supabase skipped/failed:', err);
@@ -99,29 +119,32 @@ export const AnalyticsService = {
    * Aggregate & Compute Analytics Metrics for Dashboard
    */
   async getAnalyticsSummary(timeRange: 'today' | '7d' | '30d' | 'all' = '7d'): Promise<AnalyticsSummary> {
-    const supabase = getSupabaseClient();
     let events: PageAnalyticsEvent[] = [];
 
-    if (supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('page_analytics')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(500);
+    // Query remote page_analytics table only if valid Supabase credentials are configured
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseClient();
+      if (supabase) {
+        try {
+          const { data, error } = await supabase
+            .from(PAGE_ANALYTICS_TABLE)
+            .select('id, event_type, entity_id, metadata, user_id, created_at')
+            .order('created_at', { ascending: false })
+            .limit(500);
 
-        if (!error && data && data.length > 0) {
-          events = data.map((r: any) => ({
-            id: r.id,
-            eventType: r.event_type,
-            entityId: r.entity_id,
-            metadata: r.metadata || {},
-            userId: r.user_id,
-            createdAt: r.created_at,
-          }));
+          if (!error && data && data.length > 0) {
+            events = data.map((r: any) => ({
+              id: r.id,
+              eventType: r.event_type,
+              entityId: r.entity_id,
+              metadata: r.metadata || {},
+              userId: r.user_id,
+              createdAt: r.created_at,
+            }));
+          }
+        } catch (err) {
+          console.warn('Supabase analytics fetch error, falling back to local cache', err);
         }
-      } catch (err) {
-        console.warn('Supabase analytics fetch error, falling back to local', err);
       }
     }
 
