@@ -1565,7 +1565,6 @@ export const StorageService = {
         (async () => {
           try {
             const payload = {
-              id: 'default',
               key: 'default',
               value: config,
               updated_at: new Date().toISOString(),
@@ -1573,18 +1572,12 @@ export const StorageService = {
 
             const { error } = await supabase
               .from('ads_config')
-              .upsert([payload], { onConflict: 'key' }); // تم التعديل إلى 'key' بنجاح تام
+              .upsert([payload], { onConflict: 'key' });
 
             if (error) {
-              console.warn('[StorageService.saveAdsConfig] ads_config upsert warning (trying onConflict id):', error);
-              const fallbackRes = await supabase
-                .from('ads_config')
-                .upsert([payload], { onConflict: 'id' });
-
-              if (fallbackRes.error) {
-                // Fallback to legacy ads_settings table
-                await SupabaseDbService.saveAdsConfig(config).catch(() => {});
-              }
+              console.warn('[StorageService.saveAdsConfig] ads_config upsert error:', error);
+              // Fallback to legacy ads_settings table
+              await SupabaseDbService.saveAdsConfig(config).catch(() => {});
             }
           } catch (err) {
             console.warn('[StorageService.saveAdsConfig] Exception during remote upsert:', err);
