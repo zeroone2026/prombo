@@ -283,6 +283,9 @@ const DEFAULT_ADS_CONFIG: AdsEngineConfig = {
   },
 };
 
+/**
+ * Safely merge raw ads config from storage or remote database with defaults
+ */
 export function mergeAdsConfig(source: any): AdsEngineConfig {
   if (!source || typeof source !== 'object') {
     return DEFAULT_ADS_CONFIG;
@@ -350,6 +353,7 @@ export function mergeAdsConfig(source: any): AdsEngineConfig {
   };
 }
 
+// Default Admin Config template
 const DEFAULT_ADMIN: AdminUser = {
   email: (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_ADMIN_EMAIL || '')) || 'zero.oneone.gamer@gmail.com',
   role: 'admin',
@@ -357,6 +361,7 @@ const DEFAULT_ADMIN: AdminUser = {
 };
 
 export const StorageService = {
+  // PROMPTS CRUD
   getPrompts(): Prompt[] {
     try {
       const stored = safeStorage.getItem(PROMPTS_STORAGE_KEY);
@@ -378,6 +383,7 @@ export const StorageService = {
       try {
         const remote = await SupabaseDbService.getPrompts();
         if (remote !== null && Array.isArray(remote)) {
+          // Immediately synchronize authentic Supabase database state into local storage
           safeStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(remote));
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('prombo_prompts_change', { detail: remote }));
@@ -391,6 +397,9 @@ export const StorageService = {
     return this.getPrompts();
   },
 
+  /**
+   * Fetch Community Posts from Supabase `community_posts` table and sync to local cache
+   */
   async fetchCommunityPosts(options?: { promptId?: string }): Promise<CommunityPost[]> {
     const supabase = getSupabaseClient();
     if (supabase && isSupabaseConfigured()) {
@@ -407,6 +416,7 @@ export const StorageService = {
 
         const currentUser = AuthService.getCurrentUser();
         if (currentUser?.id) {
+          // Fetch active posts, and also pending posts belonging to the current user so they don't vanish
           query = query.or(`status.eq.active,user_id.eq.${currentUser.id}`);
         } else {
           query = query.eq('status', 'active');
@@ -414,6 +424,7 @@ export const StorageService = {
 
         const { data, error } = await query;
         if (!error && data !== null && Array.isArray(data)) {
+          // Get local like status if available
           let userLikes: Record<string, boolean> = {};
           try {
             const storedLikes = safeStorage.getItem('prombo_community_likes_v1');
@@ -458,6 +469,7 @@ export const StorageService = {
             parent.repliesCount = Math.max(Number(parent.repliesCount) || 0, postReplies.length);
           });
 
+          // Sync authentic state into local storage
           safeStorage.setItem('prombo_community_posts_v1', JSON.stringify(topLevelPosts));
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: topLevelPosts }));
@@ -469,6 +481,7 @@ export const StorageService = {
       }
     }
 
+    // Local storage fallback
     try {
       const stored = safeStorage.getItem('prombo_community_posts_v1');
       if (stored) {
@@ -485,6 +498,9 @@ export const StorageService = {
     return [];
   },
 
+  /**
+   * Subscribe to live postgres_changes for community posts
+   */
   subscribeToCommunityPosts(callback: (posts: CommunityPost[]) => void): () => void {
     const supabase = getSupabaseClient();
     if (!supabase || !isSupabaseConfigured()) {
@@ -529,9 +545,11 @@ export const StorageService = {
     const cleanId = (id || '').trim();
     if (!cleanId) return undefined;
 
+    // 1. Check local cache
     const local = this.getPromptById(cleanId);
     if (local) return local;
 
+    // 2. Query Supabase if configured
     if (isSupabaseConfigured()) {
       try {
         const remote = await SupabaseDbService.getPromptById(cleanId);
@@ -555,6 +573,7 @@ export const StorageService = {
     const now = new Date().toISOString();
     
     if (prompt.id) {
+      // Update
       const index = prompts.findIndex(p => p.id === prompt.id);
       if (index !== -1) {
         const existingPrompt = prompts[index];
@@ -575,6 +594,7 @@ export const StorageService = {
           SupabaseDbService.savePrompt(updated).catch((e) => console.warn('Supabase sync warning [savePrompt update]:', e));
         }
 
+        // Centrally audit prompt update
         AuditService.logAction({
           action: 'UPDATE_PROMPT',
           userId: updated.authorId || updated.userId,
@@ -591,6 +611,8 @@ export const StorageService = {
       }
     }
 
+    // Create new
+    // Centralized Action Guardrail: Strict guest restriction for new prompt creation
     const activeUser = AuthService.getCurrentUser();
     if (!prompt.id && (!activeUser || activeUser.isGuest)) {
       throw new Error('Authentication required: Registration is required to submit prompts.');
@@ -632,6 +654,7 @@ export const StorageService = {
     prompts.unshift(newPrompt);
     safeStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(prompts));
 
+    // Sound notification if created as approved/published directly
     if (newPrompt.status === 'approved' || (newPrompt.status as any) === 'published') {
       try {
         SoundNotificationService.notifyPromptPublished({
@@ -645,10 +668,12 @@ export const StorageService = {
       }
     }
 
+    // Asynchronously push to Supabase if configured
     if (isSupabaseConfigured()) {
       SupabaseDbService.savePrompt(newPrompt).catch((e) => console.warn('Supabase sync warning [savePrompt]:', e));
     }
 
+    // Centrally audit prompt creation
     AuditService.logAction({
       action: 'CREATE_PROMPT',
       userId: newPrompt.authorId || newPrompt.userId,
@@ -665,6 +690,7 @@ export const StorageService = {
   },
 
   updatePrompt(id: string, updates: Partial<Prompt>, requestingUserId?: string, isAdmin: boolean = false): Prompt | null {
+    // Centralized Action Guardrail: Strict guest restriction
     const activeUser = AuthService.getCurrentUser();
     if (!activeUser || activeUser.isGuest) {
       console.warn(`StorageService.updatePrompt: guests cannot edit prompts`);
@@ -719,6 +745,7 @@ export const StorageService = {
       }
       safeStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(prompts));
 
+      // Notification on publishing approved prompt
       const isNowPublished = status === 'approved' || (status as any) === 'published';
       const wasPublished = previousStatus === 'approved' || (previousStatus as any) === 'published';
       const targetUserId = prompts[index].authorId || prompts[index].author_id || prompts[index].userId;
@@ -778,6 +805,7 @@ export const StorageService = {
   },
 
   deletePrompt(id: string, requestingUserId?: string, isAdmin: boolean = false): boolean {
+    // Centralized Action Guardrail: Strict guest restriction
     const activeUser = AuthService.getCurrentUser();
     if (!activeUser || activeUser.isGuest) {
       console.warn(`StorageService.deletePrompt: guests cannot delete prompts`);
@@ -807,6 +835,7 @@ export const StorageService = {
         SupabaseDbService.deletePrompt(id).catch((e) => console.warn('Supabase sync warning [deletePrompt]:', e));
       }
 
+      // Centrally audit prompt deletion
       AuditService.logAction({
         action: 'DELETE_PROMPT',
         userId: requestingUserId || target.authorId || target.userId,
@@ -824,6 +853,9 @@ export const StorageService = {
     return false;
   },
 
+  /**
+   * Update Author Name & Avatar across all prompts authored by this user
+   */
   async updateUserAuthorDetails(userId: string, newName: string, newAvatar: string): Promise<void> {
     const cleanUserId = (userId || '').trim();
     const cleanName = (newName || '').trim();
@@ -858,6 +890,7 @@ export const StorageService = {
       }
     }
 
+    // Sync to Supabase prompts table if configured
     if (isSupabaseConfigured()) {
       try {
         const client = getSupabaseClient();
@@ -890,6 +923,7 @@ export const StorageService = {
     return 0;
   },
 
+  // FAVORITES
   getFavorites(): string[] {
     try {
       const stored = safeStorage.getItem(FAVORITES_STORAGE_KEY);
@@ -912,6 +946,7 @@ export const StorageService = {
     return !exists;
   },
 
+  // CATEGORIES CRUD
   getCategories(): Category[] {
     try {
       const stored = safeStorage.getItem(CATEGORIES_STORAGE_KEY);
@@ -952,6 +987,7 @@ export const StorageService = {
             order: row.order_num ?? row.order ?? 0,
           }));
 
+          // Immediately synchronize authentic Supabase database state into local storage
           safeStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(remoteCategories));
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('prombo_categories_change', { detail: remoteCategories }));
@@ -1012,6 +1048,7 @@ export const StorageService = {
     return false;
   },
 
+  // ADMIN AUTH & CREDENTIALS
   getAdminConfig(): AdminUser {
     try {
       const stored = safeStorage.getItem(ADMIN_USER_STORAGE_KEY);
@@ -1078,10 +1115,12 @@ export const StorageService = {
       const session = JSON.parse(sessionStr);
       if (!session || typeof session !== 'object') return false;
 
+      // Require role === 'admin' and non-empty valid string email
       if (session.role !== 'admin' || typeof session.email !== 'string' || !session.email.trim()) {
         return false;
       }
 
+      // Max session age: 7 days
       if (session.lastLogin) {
         const loginTime = new Date(session.lastLogin).getTime();
         const maxAge = 7 * 24 * 60 * 60 * 1000;
@@ -1091,6 +1130,7 @@ export const StorageService = {
         }
       }
 
+      // SEC-02: Require that the session email is genuinely authorized
       if (!isAdminEmail(session.email)) {
         safeStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
         return false;
@@ -1133,6 +1173,7 @@ export const StorageService = {
     admin.email = newEmail.trim().toLowerCase();
     safeStorage.setItem(ADMIN_USER_STORAGE_KEY, JSON.stringify(admin));
 
+    // Update active session if exists
     const session = this.getCurrentSession();
     if (session) {
       session.email = admin.email;
@@ -1155,6 +1196,7 @@ export const StorageService = {
     return { success: true, message: 'Password updated successfully' };
   },
 
+  // PLATFORM GLOBAL SETTINGS
   getPlatformSettings(): PlatformSettings {
     try {
       const stored = safeStorage.getItem(SETTINGS_STORAGE_KEY);
@@ -1188,10 +1230,14 @@ export const StorageService = {
     }
   },
 
+  /**
+   * Fetch Platform Settings from Supabase `platform_settings` (or `system_config`) table
+   */
   async fetchPlatformSettings(): Promise<PlatformSettings> {
     const supabase = getSupabaseClient();
     if (supabase && isSupabaseConfigured()) {
       try {
+        // 1. Check dedicated platform_settings table
         const { data: psData, error: psError } = await supabase
           .from('platform_settings')
           .select('*')
@@ -1231,6 +1277,7 @@ export const StorageService = {
           return merged;
         }
 
+        // 2. Fallback to system_config table (key = 'platform_settings')
         const sysSettings = await SupabaseDbService.getPlatformSettings();
         if (sysSettings) {
           const merged: PlatformSettings = {
@@ -1310,6 +1357,7 @@ export const StorageService = {
     if (isSupabaseConfigured()) {
       const supabase = getSupabaseClient();
       if (supabase) {
+        // Upsert to platform_settings table (key/id: 'default', value: platformSettings)
         (async () => {
           try {
             const payload = {
@@ -1325,11 +1373,13 @@ export const StorageService = {
               .upsert([payload], { onConflict: 'id' });
 
             if (error) {
+              console.warn('[StorageService.updatePlatformSettings] platform_settings upsert warning (trying onConflict key):', error);
               const fallbackRes = await supabase
                 .from('platform_settings')
                 .upsert([payload], { onConflict: 'key' });
 
               if (fallbackRes.error) {
+                // Fallback to system_config table
                 await SupabaseDbService.savePlatformSettings(updated).catch(() => {});
               }
             }
@@ -1342,9 +1392,13 @@ export const StorageService = {
     return updated;
   },
 
+  /**
+   * Subscribe to live postgres_changes for platform settings
+   */
   subscribeToPlatformSettings(callback: (settings: PlatformSettings) => void): () => void {
     const supabase = getSupabaseClient();
 
+    // Local in-browser event listener
     const localHandler = (e: any) => {
       if (e?.detail) {
         callback(e.detail);
@@ -1373,6 +1427,7 @@ export const StorageService = {
             table: 'platform_settings',
           },
           async (payload) => {
+            console.log('[PROMBOT_DEBUG] Supabase Realtime received platform_settings change:', payload);
             const updated = await this.fetchPlatformSettings();
             callback(updated);
           }
@@ -1408,6 +1463,7 @@ export const StorageService = {
     }
   },
 
+  // CONTENT & MEDIA SETTINGS
   getContentMediaSettings(): ContentMediaSettings {
     const platform = this.getPlatformSettings();
     return platform.contentMedia || DEFAULT_CONTENT_MEDIA_SETTINGS;
@@ -1434,10 +1490,12 @@ export const StorageService = {
     return updated;
   },
 
+  // ADS & MONETIZATION ENGINE CONFIG
   getAdsConfig(): AdsEngineConfig {
     try {
       let stored = safeStorage.getItem(ADS_CONFIG_STORAGE_KEY);
       
+      // Migrate from v1 cache if v2 not yet created
       if (!stored) {
         const oldV1 = safeStorage.getItem('prombo_ads_engine_v1');
         if (oldV1) {
@@ -1464,7 +1522,9 @@ export const StorageService = {
             };
             safeStorage.setItem(ADS_CONFIG_STORAGE_KEY, JSON.stringify(migratedConfig));
             return migratedConfig;
-          } catch {}
+          } catch {
+            // fallback to default
+          }
         }
       }
 
@@ -1479,7 +1539,11 @@ export const StorageService = {
     }
   },
 
+  /**
+   * Save Ads Config to local storage and perform remote upsert to Supabase table `ads_config`
+   */
   saveAdsConfig(config: AdsEngineConfig): AdsEngineConfig {
+    // Keep gridNative slot in sync with homeFeedEnabled and homeFeedSnippet
     if (config.slots?.gridNative) {
       if (typeof config.homeFeedEnabled === 'boolean') {
         config.slots.gridNative.isEnabled = config.homeFeedEnabled;
@@ -1509,18 +1573,21 @@ export const StorageService = {
 
             const { error } = await supabase
               .from('ads_config')
-              .upsert([payload], { onConflict: 'id' });
+              .upsert([payload], { onConflict: 'key' }); // تم التعديل إلى 'key' بنجاح تام
 
             if (error) {
+              console.warn('[StorageService.saveAdsConfig] ads_config upsert warning (trying onConflict id):', error);
               const fallbackRes = await supabase
                 .from('ads_config')
-                .upsert([payload], { onConflict: 'key' });
+                .upsert([payload], { onConflict: 'id' });
 
               if (fallbackRes.error) {
+                // Fallback to legacy ads_settings table
                 await SupabaseDbService.saveAdsConfig(config).catch(() => {});
               }
             }
           } catch (err) {
+            console.warn('[StorageService.saveAdsConfig] Exception during remote upsert:', err);
             await SupabaseDbService.saveAdsConfig(config).catch(() => {});
           }
         })();
@@ -1530,10 +1597,14 @@ export const StorageService = {
     return config;
   },
 
+  /**
+   * Fetch Ads Config from Supabase `ads_config` table (with fallback to `ads_settings` and local storage)
+   */
   async fetchAdsConfig(): Promise<AdsEngineConfig> {
     const supabase = getSupabaseClient();
     if (supabase && isSupabaseConfigured()) {
       try {
+        // 1. Query dedicated ads_config table
         const { data: acData, error: acError } = await supabase
           .from('ads_config')
           .select('*')
@@ -1550,6 +1621,7 @@ export const StorageService = {
           return merged;
         }
 
+        // 2. Fallback to ads_settings table (key = 'ads_config')
         const legacyAds = await SupabaseDbService.getAdsConfig();
         if (legacyAds) {
           const merged = mergeAdsConfig(legacyAds);
@@ -1566,9 +1638,13 @@ export const StorageService = {
     return this.getAdsConfig();
   },
 
+  /**
+   * Subscribe to live postgres_changes for ads config
+   */
   subscribeToAdsConfig(callback: (config: AdsEngineConfig) => void): () => void {
     const supabase = getSupabaseClient();
 
+    // Local in-browser event listener
     const localHandler = (e: any) => {
       if (e?.detail) {
         callback(e.detail);
@@ -1597,6 +1673,7 @@ export const StorageService = {
             table: 'ads_config',
           },
           async (payload) => {
+            console.log('[PROMBOT_DEBUG] Supabase Realtime received ads_config change:', payload);
             const updated = await this.fetchAdsConfig();
             callback(updated);
           }
@@ -1632,6 +1709,9 @@ export const StorageService = {
     }
   },
 
+  /**
+   * Safely records and increments click count for a given feed ad slot
+   */
   recordFeedAdClick(slotId: string): number {
     try {
       const config = this.getAdsConfig();
@@ -1667,6 +1747,9 @@ export const StorageService = {
     return 0;
   },
 
+  /**
+   * Resets feed ad clicks (for a single slot or all 20 slots)
+   */
   resetFeedAdClicks(slotId?: string): void {
     try {
       const config = this.getAdsConfig();
@@ -1698,6 +1781,9 @@ export const StorageService = {
     }
   },
 
+  /**
+   * Normalizes slot key aliases to standard AdSlotId
+   */
   normalizeGlobalSlotId(slotKey: string): AdSlotId | null {
     if (!slotKey) return null;
     const clean = slotKey.trim();
@@ -1712,6 +1798,9 @@ export const StorageService = {
     return null;
   },
 
+  /**
+   * Safely records and increments click count for any global ad slot
+   */
   recordGlobalAdClick(slotKey: string): number {
     try {
       const config = this.getAdsConfig();
@@ -1735,6 +1824,9 @@ export const StorageService = {
     return 0;
   },
 
+  /**
+   * Resets global ad clicks (for a single slot or all global slots)
+   */
   resetGlobalAdClicks(slotKey?: string): void {
     try {
       const config = this.getAdsConfig();
@@ -1779,6 +1871,7 @@ export const StorageService = {
     return config;
   },
 
+  // BACKUP & EXPORT / IMPORT
   exportBackupJSON(): string {
     const data = {
       version: '1.1',
@@ -1803,6 +1896,7 @@ export const StorageService = {
         return { success: false, message: 'Invalid backup file: prompts and categories arrays are required' };
       }
 
+      // Schema validation and sanitization for prompts
       const validatedPrompts: Prompt[] = data.prompts
         .filter((p: any) => p && typeof p === 'object' && typeof p.title === 'string' && typeof p.prompt === 'string')
         .map((p: any) => ({
@@ -1829,6 +1923,7 @@ export const StorageService = {
           updatedAt: String(p.updatedAt || new Date().toISOString()),
         }));
 
+      // Schema validation and sanitization for categories
       const validatedCategories: Category[] = data.categories
         .filter((c: any) => c && typeof c === 'object' && typeof c.id === 'string' && typeof c.name === 'string')
         .map((c: any) => ({
