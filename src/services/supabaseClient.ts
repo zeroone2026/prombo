@@ -678,13 +678,26 @@ export const SupabaseDbService = {
   },
 
   /**
-   * Fetch platform settings from `system_config` table
+   * Fetch platform settings from `platform_settings` table (key/id: 'default'), fallback to `system_config`
    */
   async getPlatformSettings(): Promise<PlatformSettings | null> {
     const supabase = getSupabaseClient();
     if (!supabase) return null;
 
     try {
+      // 1. Query dedicated platform_settings table
+      const { data: psData, error: psError } = await supabase
+        .from('platform_settings')
+        .select('*')
+        .limit(1);
+
+      if (!psError && psData && psData.length > 0) {
+        const row = psData[0];
+        const val = row.value || row.settings || row.data || row;
+        return val as PlatformSettings;
+      }
+
+      // 2. Fallback to system_config table
       const { data, error } = await supabase
         .from('system_config')
         .select('value')
@@ -699,30 +712,65 @@ export const SupabaseDbService = {
   },
 
   /**
-   * Save platform settings to `system_config` table
+   * Save platform settings to `platform_settings` table (key/id: 'default', value: platformSettings)
    */
   async savePlatformSettings(settings: PlatformSettings): Promise<boolean> {
     const supabase = getSupabaseClient();
     if (!supabase) return false;
 
     try {
-      const { error } = await supabase
-        .from('system_config')
-        .upsert([{ key: 'platform_settings', value: settings, updated_at: new Date().toISOString() }]);
-      return !error;
+      const payload = {
+        id: 'default',
+        key: 'default',
+        value: settings,
+        settings,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error: psError } = await supabase
+        .from('platform_settings')
+        .upsert([payload], { onConflict: 'id' });
+
+      if (psError) {
+        const fallbackRes = await supabase
+          .from('platform_settings')
+          .upsert([payload], { onConflict: 'key' });
+
+        if (fallbackRes.error) {
+          // Fallback to system_config table
+          const { error: sysError } = await supabase
+            .from('system_config')
+            .upsert([{ key: 'platform_settings', value: settings, updated_at: new Date().toISOString() }]);
+          return !sysError;
+        }
+      }
+      return true;
     } catch {
       return false;
     }
   },
 
   /**
-   * Fetch Ads settings from `ads_settings` table
+   * Fetch Ads settings from `ads_config` table (key/id: 'default'), fallback to `ads_settings`
    */
   async getAdsConfig(): Promise<AdsEngineConfig | null> {
     const supabase = getSupabaseClient();
     if (!supabase) return null;
 
     try {
+      // 1. Query dedicated ads_config table
+      const { data: acData, error: acError } = await supabase
+        .from('ads_config')
+        .select('*')
+        .limit(1);
+
+      if (!acError && acData && acData.length > 0) {
+        const row = acData[0];
+        const val = row.value || row.config || row.settings || row.data || row;
+        return val as AdsEngineConfig;
+      }
+
+      // 2. Fallback to ads_settings table
       const { data, error } = await supabase
         .from('ads_settings')
         .select('value')
@@ -737,17 +785,38 @@ export const SupabaseDbService = {
   },
 
   /**
-   * Save Ads settings to `ads_settings` table
+   * Save Ads settings to `ads_config` table (key/id: 'default', value: adsConfig)
    */
   async saveAdsConfig(config: AdsEngineConfig): Promise<boolean> {
     const supabase = getSupabaseClient();
     if (!supabase) return false;
 
     try {
-      const { error } = await supabase
-        .from('ads_settings')
-        .upsert([{ key: 'ads_config', value: config, updated_at: new Date().toISOString() }]);
-      return !error;
+      const payload = {
+        id: 'default',
+        key: 'default',
+        value: config,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error: acError } = await supabase
+        .from('ads_config')
+        .upsert([payload], { onConflict: 'id' });
+
+      if (acError) {
+        const fallbackRes = await supabase
+          .from('ads_config')
+          .upsert([payload], { onConflict: 'key' });
+
+        if (fallbackRes.error) {
+          // Fallback to ads_settings table
+          const { error: legacyError } = await supabase
+            .from('ads_settings')
+            .upsert([{ key: 'ads_config', value: config, updated_at: new Date().toISOString() }]);
+          return !legacyError;
+        }
+      }
+      return true;
     } catch {
       return false;
     }
