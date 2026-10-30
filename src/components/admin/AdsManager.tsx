@@ -103,8 +103,10 @@ export const AdsManager: React.FC<AdsManagerProps> = ({
       }
     };
     window.addEventListener('prombo_ads_click_recorded', handleAdClickEvent);
+    window.addEventListener('prombo_ads_config_changed', handleAdClickEvent);
     return () => {
       window.removeEventListener('prombo_ads_click_recorded', handleAdClickEvent);
+      window.removeEventListener('prombo_ads_config_changed', handleAdClickEvent);
     };
   }, []);
 
