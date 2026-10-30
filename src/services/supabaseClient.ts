@@ -801,12 +801,12 @@ export const SupabaseDbService = {
 
       const { error: acError } = await supabase
         .from('ads_config')
-        .upsert([payload], { onConflict: 'id' });
+        .upsert([payload], { onConflict: 'key' }); // تم التعديل إلى 'key' بنجاح
 
       if (acError) {
         const fallbackRes = await supabase
           .from('ads_config')
-          .upsert([payload], { onConflict: 'key' });
+          .upsert([payload], { onConflict: 'id' });
 
         if (fallbackRes.error) {
           // Fallback to ads_settings table
