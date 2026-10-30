@@ -1,5 +1,5 @@
 import { CommunityPost, SiteSettings, CommunityUser } from '../types';
-import { getSupabaseClient } from './supabaseClient';
+import { getSupabaseClient, isSupabaseConfigured } from './supabaseClient';
 import { safeStorage } from '../utils/securityUtils';
 import { DEFAULT_AVATAR_URL, isAdminUser } from '../utils/authUtils';
 import { AnalyticsService } from './analyticsService';
@@ -123,6 +123,111 @@ export const CommunityService = {
   },
 
   /**
+   * Fetch Site Settings (Community Switch & Policies) from Supabase `site_settings` table
+   * Specifically filtered by `{ key: 'community_config' }`
+   */
+  async fetchSiteSettings(): Promise<SiteSettings> {
+    const supabase = getSupabaseClient();
+    if (supabase && isSupabaseConfigured()) {
+      try {
+        const { data, error } = await supabase
+          .from('site_settings')
+          .select('value')
+          .eq('key', 'community_config')
+          .maybeSingle();
+
+        if (!error && data && data.value) {
+          const parsedValue = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+          const merged: SiteSettings = {
+            ...DEFAULT_SITE_SETTINGS,
+            ...parsedValue,
+          };
+          safeStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('prombo_community_settings_change', { detail: merged }));
+          }
+          return merged;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch site settings from Supabase:', err);
+      }
+    }
+    return this.getSiteSettings();
+  },
+
+  /**
+   * Subscribe to live postgres_changes for `site_settings` table where key = 'community_config'
+   */
+  subscribeToSiteSettings(callback: (settings: SiteSettings) => void): () => void {
+    const supabase = getSupabaseClient();
+
+    // Local in-browser event listener for zero-latency local updates
+    const localHandler = (e: any) => {
+      if (e.detail) {
+        callback(e.detail);
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('prombo_community_settings_change', localHandler);
+    }
+
+    if (!supabase || !isSupabaseConfigured()) {
+      return () => {
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('prombo_community_settings_change', localHandler);
+        }
+      };
+    }
+
+    try {
+      const channel = supabase
+        .channel(`site_settings_realtime_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'site_settings',
+            filter: 'key=eq.community_config',
+          },
+          async (payload) => {
+            const newRecord = payload.new as any;
+            if (newRecord?.value) {
+              const remoteVal = typeof newRecord.value === 'string' ? JSON.parse(newRecord.value) : newRecord.value;
+              const merged: SiteSettings = {
+                ...DEFAULT_SITE_SETTINGS,
+                ...remoteVal,
+              };
+              safeStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+              callback(merged);
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('prombo_community_settings_change', { detail: merged }));
+              }
+            } else {
+              const updated = await this.fetchSiteSettings();
+              callback(updated);
+            }
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('prombo_community_settings_change', localHandler);
+        }
+      };
+    } catch (err) {
+      console.warn('Failed to subscribe to site settings realtime channel:', err);
+      return () => {
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('prombo_community_settings_change', localHandler);
+        }
+      };
+    }
+  },
+
+  /**
    * Save Site Settings
    */
   async updateSiteSettings(settings: Partial<SiteSettings>): Promise<SiteSettings> {
@@ -132,11 +237,11 @@ export const CommunityService = {
 
     // Sync to Supabase `site_settings`
     const supabase = getSupabaseClient();
-    if (supabase) {
+    if (supabase && isSupabaseConfigured()) {
       try {
         await supabase
           .from('site_settings')
-          .upsert([{ key: 'community_config', value: updated, updated_at: new Date().toISOString() }]);
+          .upsert([{ key: 'community_config', value: updated, updated_at: new Date().toISOString() }], { onConflict: 'key' });
       } catch (err) {
         console.warn('Failed to sync site settings to Supabase', err);
       }
