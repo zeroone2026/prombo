@@ -298,7 +298,40 @@ function MainApp() {
           setCategories(remoteCategories);
         }
       }).catch(() => {});
+
+      StorageService.fetchPlatformSettings().then((remoteSettings) => {
+        if (remoteSettings) {
+          setPlatformSettings(remoteSettings);
+        }
+      }).catch(() => {});
+
+      CommunityService.fetchSiteSettings().then((remoteSiteSettings) => {
+        if (remoteSiteSettings) {
+          setSiteSettings(remoteSiteSettings);
+        }
+      }).catch(() => {});
     }
+
+    // Subscribe to platform settings realtime sync across the entire app
+    const unsubscribePlatformSettings = StorageService.subscribeToPlatformSettings((newSettings) => {
+      setPlatformSettings(newSettings);
+      if (newSettings?.appearance?.homeGridColumns) {
+        const userPref = localStorage.getItem('prombo_user_grid_preference');
+        if (!userPref && [1, 2, 3, 4].includes(newSettings.appearance.homeGridColumns)) {
+          setGridColumns(window.innerWidth < 768 ? 1 : newSettings.appearance.homeGridColumns);
+        }
+      }
+    });
+
+    // Subscribe to site settings (community switch) realtime sync across all connected clients
+    const unsubscribeSiteSettings = CommunityService.subscribeToSiteSettings((newSiteSettings) => {
+      setSiteSettings(newSiteSettings);
+    });
+
+    return () => {
+      unsubscribePlatformSettings();
+      unsubscribeSiteSettings();
+    };
   }, []);
 
   // Listen to auth & profile changes and realtime prompts updates
