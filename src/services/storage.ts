@@ -283,7 +283,73 @@ const DEFAULT_ADS_CONFIG: AdsEngineConfig = {
   },
 };
 
-// Default Admin Config template
+export function mergeAdsConfig(source: any): AdsEngineConfig {
+  if (!source || typeof source !== 'object') {
+    return DEFAULT_ADS_CONFIG;
+  }
+  const raw = source.value || source.config || source.settings || source.data || source;
+  if (!raw || typeof raw !== 'object') {
+    return DEFAULT_ADS_CONFIG;
+  }
+
+  const mergedSlots = { ...DEFAULT_ADS_CONFIG.slots };
+  if (raw.slots && typeof raw.slots === 'object') {
+    for (const [key, slot] of Object.entries(raw.slots as Record<string, any>)) {
+      const sid = key as AdSlotId;
+      if (mergedSlots[sid] && slot && typeof slot === 'object') {
+        const snippet = slot.codeSnippet || '';
+        const isLegacyHardcoded = snippet.includes('550px') || snippet.includes('min-height: 500px') || snippet.includes('height: 550px');
+        mergedSlots[sid] = {
+          ...mergedSlots[sid],
+          ...slot,
+          clickCount: typeof slot.clickCount === 'number' ? slot.clickCount : (mergedSlots[sid].clickCount || 0),
+          codeSnippet: isLegacyHardcoded ? DEFAULT_ADS_CONFIG.slots[sid].codeSnippet : (snippet || DEFAULT_ADS_CONFIG.slots[sid].codeSnippet),
+        };
+      }
+    }
+  }
+
+  const defaultHomeSlots = createDefaultHomeSlots();
+  const defaultCommSlots = createDefaultCommunitySlots();
+
+  const mergedHomeSlots: Record<string, FeedAdSlotConfig> = {};
+  for (let i = 0; i < 10; i++) {
+    const sid = `home_feed_ad_${i}`;
+    const existing = (raw.homeSlots && raw.homeSlots[sid]) || {};
+    mergedHomeSlots[sid] = {
+      ...defaultHomeSlots[sid],
+      ...existing,
+      clickCount: typeof existing.clickCount === 'number' ? existing.clickCount : 0,
+    };
+  }
+
+  const mergedCommSlots: Record<string, FeedAdSlotConfig> = {};
+  for (let i = 0; i < 10; i++) {
+    const sid = `comm_feed_ad_${i}`;
+    const existing = (raw.communitySlots && raw.communitySlots[sid]) || {};
+    mergedCommSlots[sid] = {
+      ...defaultCommSlots[sid],
+      ...existing,
+      clickCount: typeof existing.clickCount === 'number' ? existing.clickCount : 0,
+    };
+  }
+
+  return {
+    masterEnabled: raw.masterEnabled ?? true,
+    slots: mergedSlots,
+    homeAdFrequency: typeof raw.homeAdFrequency === 'number' ? raw.homeAdFrequency : 5,
+    communityAdFrequency: typeof raw.communityAdFrequency === 'number' ? raw.communityAdFrequency : 5,
+    homeFeedEnabled: raw.homeFeedEnabled ?? (mergedSlots.gridNative ? mergedSlots.gridNative.isEnabled : true),
+    communityFeedEnabled: raw.communityFeedEnabled ?? true,
+    homeFeedSnippet: raw.homeFeedSnippet || (mergedSlots.gridNative ? mergedSlots.gridNative.codeSnippet : ''),
+    communityFeedSnippet: raw.communityFeedSnippet || '',
+    homeFeedCtaUrl: raw.homeFeedCtaUrl || 'https://example.com',
+    communityFeedCtaUrl: raw.communityFeedCtaUrl || 'https://example.com',
+    homeSlots: mergedHomeSlots,
+    communitySlots: mergedCommSlots,
+  };
+}
+
 const DEFAULT_ADMIN: AdminUser = {
   email: (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_ADMIN_EMAIL || '')) || 'zero.oneone.gamer@gmail.com',
   role: 'admin',
@@ -291,7 +357,6 @@ const DEFAULT_ADMIN: AdminUser = {
 };
 
 export const StorageService = {
-  // PROMPTS CRUD
   getPrompts(): Prompt[] {
     try {
       const stored = safeStorage.getItem(PROMPTS_STORAGE_KEY);
@@ -313,7 +378,6 @@ export const StorageService = {
       try {
         const remote = await SupabaseDbService.getPrompts();
         if (remote !== null && Array.isArray(remote)) {
-          // Immediately synchronize authentic Supabase database state into local storage
           safeStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(remote));
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('prombo_prompts_change', { detail: remote }));
@@ -327,9 +391,6 @@ export const StorageService = {
     return this.getPrompts();
   },
 
-  /**
-   * Fetch Community Posts from Supabase `community_posts` table and sync to local cache
-   */
   async fetchCommunityPosts(options?: { promptId?: string }): Promise<CommunityPost[]> {
     const supabase = getSupabaseClient();
     if (supabase && isSupabaseConfigured()) {
@@ -346,7 +407,6 @@ export const StorageService = {
 
         const currentUser = AuthService.getCurrentUser();
         if (currentUser?.id) {
-          // Fetch active posts, and also pending posts belonging to the current user so they don't vanish
           query = query.or(`status.eq.active,user_id.eq.${currentUser.id}`);
         } else {
           query = query.eq('status', 'active');
@@ -354,7 +414,6 @@ export const StorageService = {
 
         const { data, error } = await query;
         if (!error && data !== null && Array.isArray(data)) {
-          // Get local like status if available
           let userLikes: Record<string, boolean> = {};
           try {
             const storedLikes = safeStorage.getItem('prombo_community_likes_v1');
@@ -399,7 +458,6 @@ export const StorageService = {
             parent.repliesCount = Math.max(Number(parent.repliesCount) || 0, postReplies.length);
           });
 
-          // Sync authentic state into local storage
           safeStorage.setItem('prombo_community_posts_v1', JSON.stringify(topLevelPosts));
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('prombo_community_posts_change', { detail: topLevelPosts }));
@@ -411,7 +469,6 @@ export const StorageService = {
       }
     }
 
-    // Local storage fallback
     try {
       const stored = safeStorage.getItem('prombo_community_posts_v1');
       if (stored) {
@@ -428,9 +485,6 @@ export const StorageService = {
     return [];
   },
 
-  /**
-   * Subscribe to live postgres_changes for community posts
-   */
   subscribeToCommunityPosts(callback: (posts: CommunityPost[]) => void): () => void {
     const supabase = getSupabaseClient();
     if (!supabase || !isSupabaseConfigured()) {
@@ -475,11 +529,9 @@ export const StorageService = {
     const cleanId = (id || '').trim();
     if (!cleanId) return undefined;
 
-    // 1. Check local cache
     const local = this.getPromptById(cleanId);
     if (local) return local;
 
-    // 2. Query Supabase if configured
     if (isSupabaseConfigured()) {
       try {
         const remote = await SupabaseDbService.getPromptById(cleanId);
@@ -503,7 +555,6 @@ export const StorageService = {
     const now = new Date().toISOString();
     
     if (prompt.id) {
-      // Update
       const index = prompts.findIndex(p => p.id === prompt.id);
       if (index !== -1) {
         const existingPrompt = prompts[index];
@@ -524,7 +575,6 @@ export const StorageService = {
           SupabaseDbService.savePrompt(updated).catch((e) => console.warn('Supabase sync warning [savePrompt update]:', e));
         }
 
-        // Centrally audit prompt update
         AuditService.logAction({
           action: 'UPDATE_PROMPT',
           userId: updated.authorId || updated.userId,
@@ -541,8 +591,6 @@ export const StorageService = {
       }
     }
 
-    // Create new
-    // Centralized Action Guardrail: Strict guest restriction for new prompt creation
     const activeUser = AuthService.getCurrentUser();
     if (!prompt.id && (!activeUser || activeUser.isGuest)) {
       throw new Error('Authentication required: Registration is required to submit prompts.');
@@ -584,7 +632,6 @@ export const StorageService = {
     prompts.unshift(newPrompt);
     safeStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(prompts));
 
-    // Sound notification if created as approved/published directly
     if (newPrompt.status === 'approved' || (newPrompt.status as any) === 'published') {
       try {
         SoundNotificationService.notifyPromptPublished({
@@ -598,12 +645,10 @@ export const StorageService = {
       }
     }
 
-    // Asynchronously push to Supabase if configured
     if (isSupabaseConfigured()) {
       SupabaseDbService.savePrompt(newPrompt).catch((e) => console.warn('Supabase sync warning [savePrompt]:', e));
     }
 
-    // Centrally audit prompt creation
     AuditService.logAction({
       action: 'CREATE_PROMPT',
       userId: newPrompt.authorId || newPrompt.userId,
@@ -620,7 +665,6 @@ export const StorageService = {
   },
 
   updatePrompt(id: string, updates: Partial<Prompt>, requestingUserId?: string, isAdmin: boolean = false): Prompt | null {
-    // Centralized Action Guardrail: Strict guest restriction
     const activeUser = AuthService.getCurrentUser();
     if (!activeUser || activeUser.isGuest) {
       console.warn(`StorageService.updatePrompt: guests cannot edit prompts`);
@@ -675,7 +719,6 @@ export const StorageService = {
       }
       safeStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(prompts));
 
-      // Notification on publishing approved prompt
       const isNowPublished = status === 'approved' || (status as any) === 'published';
       const wasPublished = previousStatus === 'approved' || (previousStatus as any) === 'published';
       const targetUserId = prompts[index].authorId || prompts[index].author_id || prompts[index].userId;
@@ -735,7 +778,6 @@ export const StorageService = {
   },
 
   deletePrompt(id: string, requestingUserId?: string, isAdmin: boolean = false): boolean {
-    // Centralized Action Guardrail: Strict guest restriction
     const activeUser = AuthService.getCurrentUser();
     if (!activeUser || activeUser.isGuest) {
       console.warn(`StorageService.deletePrompt: guests cannot delete prompts`);
@@ -765,7 +807,6 @@ export const StorageService = {
         SupabaseDbService.deletePrompt(id).catch((e) => console.warn('Supabase sync warning [deletePrompt]:', e));
       }
 
-      // Centrally audit prompt deletion
       AuditService.logAction({
         action: 'DELETE_PROMPT',
         userId: requestingUserId || target.authorId || target.userId,
@@ -783,9 +824,6 @@ export const StorageService = {
     return false;
   },
 
-  /**
-   * Update Author Name & Avatar across all prompts authored by this user
-   */
   async updateUserAuthorDetails(userId: string, newName: string, newAvatar: string): Promise<void> {
     const cleanUserId = (userId || '').trim();
     const cleanName = (newName || '').trim();
@@ -820,7 +858,6 @@ export const StorageService = {
       }
     }
 
-    // Sync to Supabase prompts table if configured
     if (isSupabaseConfigured()) {
       try {
         const client = getSupabaseClient();
@@ -853,7 +890,6 @@ export const StorageService = {
     return 0;
   },
 
-  // FAVORITES
   getFavorites(): string[] {
     try {
       const stored = safeStorage.getItem(FAVORITES_STORAGE_KEY);
@@ -876,7 +912,6 @@ export const StorageService = {
     return !exists;
   },
 
-  // CATEGORIES CRUD
   getCategories(): Category[] {
     try {
       const stored = safeStorage.getItem(CATEGORIES_STORAGE_KEY);
@@ -917,7 +952,6 @@ export const StorageService = {
             order: row.order_num ?? row.order ?? 0,
           }));
 
-          // Immediately synchronize authentic Supabase database state into local storage
           safeStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(remoteCategories));
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('prombo_categories_change', { detail: remoteCategories }));
@@ -978,7 +1012,6 @@ export const StorageService = {
     return false;
   },
 
-  // ADMIN AUTH & CREDENTIALS
   getAdminConfig(): AdminUser {
     try {
       const stored = safeStorage.getItem(ADMIN_USER_STORAGE_KEY);
@@ -1045,12 +1078,10 @@ export const StorageService = {
       const session = JSON.parse(sessionStr);
       if (!session || typeof session !== 'object') return false;
 
-      // Require role === 'admin' and non-empty valid string email
       if (session.role !== 'admin' || typeof session.email !== 'string' || !session.email.trim()) {
         return false;
       }
 
-      // Max session age: 7 days
       if (session.lastLogin) {
         const loginTime = new Date(session.lastLogin).getTime();
         const maxAge = 7 * 24 * 60 * 60 * 1000;
@@ -1060,7 +1091,6 @@ export const StorageService = {
         }
       }
 
-      // SEC-02: Require that the session email is genuinely authorized
       if (!isAdminEmail(session.email)) {
         safeStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
         return false;
@@ -1103,7 +1133,6 @@ export const StorageService = {
     admin.email = newEmail.trim().toLowerCase();
     safeStorage.setItem(ADMIN_USER_STORAGE_KEY, JSON.stringify(admin));
 
-    // Update active session if exists
     const session = this.getCurrentSession();
     if (session) {
       session.email = admin.email;
@@ -1126,7 +1155,6 @@ export const StorageService = {
     return { success: true, message: 'Password updated successfully' };
   },
 
-  // PLATFORM GLOBAL SETTINGS
   getPlatformSettings(): PlatformSettings {
     try {
       const stored = safeStorage.getItem(SETTINGS_STORAGE_KEY);
@@ -1160,14 +1188,10 @@ export const StorageService = {
     }
   },
 
-  /**
-   * Fetch Platform Settings from Supabase `platform_settings` (or `system_config`) table
-   */
   async fetchPlatformSettings(): Promise<PlatformSettings> {
     const supabase = getSupabaseClient();
     if (supabase && isSupabaseConfigured()) {
       try {
-        // 1. Check dedicated platform_settings table
         const { data: psData, error: psError } = await supabase
           .from('platform_settings')
           .select('*')
@@ -1207,7 +1231,6 @@ export const StorageService = {
           return merged;
         }
 
-        // 2. Fallback to system_config table (key = 'platform_settings')
         const sysSettings = await SupabaseDbService.getPlatformSettings();
         if (sysSettings) {
           const merged: PlatformSettings = {
@@ -1247,6 +1270,10 @@ export const StorageService = {
     return this.getPlatformSettings();
   },
 
+  savePlatformSettings(settings: PlatformSettings): PlatformSettings {
+    return this.updatePlatformSettings(settings);
+  },
+
   updatePlatformSettings(settings: Partial<PlatformSettings>): PlatformSettings {
     const current = this.getPlatformSettings();
     const updated: PlatformSettings = {
@@ -1283,46 +1310,43 @@ export const StorageService = {
     if (isSupabaseConfigured()) {
       const supabase = getSupabaseClient();
       if (supabase) {
-        // Upsert to platform_settings table
         (async () => {
-            try {
-              const { error } = await supabase
-                .from('platform_settings')
-                .upsert(
-                  [
-                    {
-                      id: 'global',
-                      key: 'platform_settings',
-                      value: updated,
-                      settings: updated,
-                      updated_at: new Date().toISOString(),
-                    },
-                  ],
-                  { onConflict: 'id' }
-                );
+          try {
+            const payload = {
+              id: 'default',
+              key: 'default',
+              value: updated,
+              settings: updated,
+              updated_at: new Date().toISOString(),
+            };
 
-              if (error) {
-                // Fallback to system_config table
+            const { error } = await supabase
+              .from('platform_settings')
+              .upsert([payload], { onConflict: 'id' });
+
+            if (error) {
+              const fallbackRes = await supabase
+                .from('platform_settings')
+                .upsert([payload], { onConflict: 'key' });
+
+              if (fallbackRes.error) {
                 await SupabaseDbService.savePlatformSettings(updated).catch(() => {});
               }
-            } catch {
-              await SupabaseDbService.savePlatformSettings(updated).catch(() => {});
             }
-          })();
+          } catch {
+            await SupabaseDbService.savePlatformSettings(updated).catch(() => {});
+          }
+        })();
       }
     }
     return updated;
   },
 
-  /**
-   * Subscribe to live postgres_changes for platform settings
-   */
   subscribeToPlatformSettings(callback: (settings: PlatformSettings) => void): () => void {
     const supabase = getSupabaseClient();
 
-    // Local in-browser event listener
     const localHandler = (e: any) => {
-      if (e.detail) {
+      if (e?.detail) {
         callback(e.detail);
       }
     };
@@ -1348,7 +1372,7 @@ export const StorageService = {
             schema: 'public',
             table: 'platform_settings',
           },
-          async () => {
+          async (payload) => {
             const updated = await this.fetchPlatformSettings();
             callback(updated);
           }
@@ -1384,7 +1408,6 @@ export const StorageService = {
     }
   },
 
-  // CONTENT & MEDIA SETTINGS
   getContentMediaSettings(): ContentMediaSettings {
     const platform = this.getPlatformSettings();
     return platform.contentMedia || DEFAULT_CONTENT_MEDIA_SETTINGS;
@@ -1411,12 +1434,10 @@ export const StorageService = {
     return updated;
   },
 
-  // ADS & MONETIZATION ENGINE CONFIG
   getAdsConfig(): AdsEngineConfig {
     try {
       let stored = safeStorage.getItem(ADS_CONFIG_STORAGE_KEY);
       
-      // Migrate from v1 cache if v2 not yet created
       if (!stored) {
         const oldV1 = safeStorage.getItem('prombo_ads_engine_v1');
         if (oldV1) {
@@ -1428,7 +1449,6 @@ export const StorageService = {
                 const sid = key as AdSlotId;
                 if (migratedSlots[sid]) {
                   const snippet = slot.codeSnippet || '';
-                  // If legacy snippet had hardcoded 550px, reset to clean responsive default template
                   const isLegacyHardcoded = snippet.includes('550px') || snippet.includes('min-height: 500px') || snippet.includes('height: 550px');
                   migratedSlots[sid] = {
                     ...migratedSlots[sid],
@@ -1444,69 +1464,13 @@ export const StorageService = {
             };
             safeStorage.setItem(ADS_CONFIG_STORAGE_KEY, JSON.stringify(migratedConfig));
             return migratedConfig;
-          } catch {
-            // fallback to default
-          }
+          } catch {}
         }
       }
 
       if (stored) {
         const parsed = JSON.parse(stored);
-        const mergedSlots = { ...DEFAULT_ADS_CONFIG.slots };
-        if (parsed.slots) {
-          for (const [key, slot] of Object.entries(parsed.slots as Record<string, any>)) {
-            const sid = key as AdSlotId;
-            if (mergedSlots[sid]) {
-              const snippet = slot.codeSnippet || '';
-              const isLegacyHardcoded = snippet.includes('550px') || snippet.includes('min-height: 500px') || snippet.includes('height: 550px');
-              mergedSlots[sid] = {
-                ...mergedSlots[sid],
-                ...slot,
-                clickCount: typeof slot.clickCount === 'number' ? slot.clickCount : (mergedSlots[sid].clickCount || 0),
-                codeSnippet: isLegacyHardcoded ? DEFAULT_ADS_CONFIG.slots[sid].codeSnippet : (snippet || DEFAULT_ADS_CONFIG.slots[sid].codeSnippet),
-              };
-            }
-          }
-        }
-        const defaultHomeSlots = createDefaultHomeSlots();
-        const defaultCommSlots = createDefaultCommunitySlots();
-        
-        const mergedHomeSlots: Record<string, FeedAdSlotConfig> = {};
-        for (let i = 0; i < 10; i++) {
-          const sid = `home_feed_ad_${i}`;
-          const existing = (parsed.homeSlots && parsed.homeSlots[sid]) || {};
-          mergedHomeSlots[sid] = {
-            ...defaultHomeSlots[sid],
-            ...existing,
-            clickCount: typeof existing.clickCount === 'number' ? existing.clickCount : 0,
-          };
-        }
-
-        const mergedCommSlots: Record<string, FeedAdSlotConfig> = {};
-        for (let i = 0; i < 10; i++) {
-          const sid = `comm_feed_ad_${i}`;
-          const existing = (parsed.communitySlots && parsed.communitySlots[sid]) || {};
-          mergedCommSlots[sid] = {
-            ...defaultCommSlots[sid],
-            ...existing,
-            clickCount: typeof existing.clickCount === 'number' ? existing.clickCount : 0,
-          };
-        }
-
-        return {
-          masterEnabled: parsed.masterEnabled ?? true,
-          slots: mergedSlots,
-          homeAdFrequency: typeof parsed.homeAdFrequency === 'number' ? parsed.homeAdFrequency : 5,
-          communityAdFrequency: typeof parsed.communityAdFrequency === 'number' ? parsed.communityAdFrequency : 5,
-          homeFeedEnabled: parsed.homeFeedEnabled ?? (mergedSlots.gridNative ? mergedSlots.gridNative.isEnabled : true),
-          communityFeedEnabled: parsed.communityFeedEnabled ?? true,
-          homeFeedSnippet: parsed.homeFeedSnippet || (mergedSlots.gridNative ? mergedSlots.gridNative.codeSnippet : ''),
-          communityFeedSnippet: parsed.communityFeedSnippet || '',
-          homeFeedCtaUrl: parsed.homeFeedCtaUrl || 'https://example.com',
-          communityFeedCtaUrl: parsed.communityFeedCtaUrl || 'https://example.com',
-          homeSlots: mergedHomeSlots,
-          communitySlots: mergedCommSlots,
-        };
+        return mergeAdsConfig(parsed);
       }
       safeStorage.setItem(ADS_CONFIG_STORAGE_KEY, JSON.stringify(DEFAULT_ADS_CONFIG));
       return DEFAULT_ADS_CONFIG;
@@ -1516,7 +1480,6 @@ export const StorageService = {
   },
 
   saveAdsConfig(config: AdsEngineConfig): AdsEngineConfig {
-    // Keep gridNative slot in sync with homeFeedEnabled and homeFeedSnippet
     if (config.slots?.gridNative) {
       if (typeof config.homeFeedEnabled === 'boolean') {
         config.slots.gridNative.isEnabled = config.homeFeedEnabled;
@@ -1525,13 +1488,150 @@ export const StorageService = {
         config.slots.gridNative.codeSnippet = config.homeFeedSnippet;
       }
     }
+
     safeStorage.setItem(ADS_CONFIG_STORAGE_KEY, JSON.stringify(config));
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('prombo_ads_config_changed', { detail: config }));
+    }
+
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseClient();
+      if (supabase) {
+        (async () => {
+          try {
+            const payload = {
+              id: 'default',
+              key: 'default',
+              value: config,
+              updated_at: new Date().toISOString(),
+            };
+
+            const { error } = await supabase
+              .from('ads_config')
+              .upsert([payload], { onConflict: 'id' });
+
+            if (error) {
+              const fallbackRes = await supabase
+                .from('ads_config')
+                .upsert([payload], { onConflict: 'key' });
+
+              if (fallbackRes.error) {
+                await SupabaseDbService.saveAdsConfig(config).catch(() => {});
+              }
+            }
+          } catch (err) {
+            await SupabaseDbService.saveAdsConfig(config).catch(() => {});
+          }
+        })();
+      }
+    }
+
     return config;
   },
 
-  /**
-   * Safely records and increments click count for a given feed ad slot
-   */
+  async fetchAdsConfig(): Promise<AdsEngineConfig> {
+    const supabase = getSupabaseClient();
+    if (supabase && isSupabaseConfigured()) {
+      try {
+        const { data: acData, error: acError } = await supabase
+          .from('ads_config')
+          .select('*')
+          .limit(1);
+
+        if (!acError && acData && acData.length > 0) {
+          const row = acData[0];
+          const raw = row.value || row.config || row.settings || row.data || row;
+          const merged = mergeAdsConfig(raw);
+          safeStorage.setItem(ADS_CONFIG_STORAGE_KEY, JSON.stringify(merged));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('prombo_ads_config_changed', { detail: merged }));
+          }
+          return merged;
+        }
+
+        const legacyAds = await SupabaseDbService.getAdsConfig();
+        if (legacyAds) {
+          const merged = mergeAdsConfig(legacyAds);
+          safeStorage.setItem(ADS_CONFIG_STORAGE_KEY, JSON.stringify(merged));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('prombo_ads_config_changed', { detail: merged }));
+          }
+          return merged;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch ads config from Supabase:', err);
+      }
+    }
+    return this.getAdsConfig();
+  },
+
+  subscribeToAdsConfig(callback: (config: AdsEngineConfig) => void): () => void {
+    const supabase = getSupabaseClient();
+
+    const localHandler = (e: any) => {
+      if (e?.detail) {
+        callback(e.detail);
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('prombo_ads_config_changed', localHandler);
+    }
+
+    if (!supabase || !isSupabaseConfigured()) {
+      return () => {
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('prombo_ads_config_changed', localHandler);
+        }
+      };
+    }
+
+    try {
+      const channel = supabase
+        .channel(`ads_config_realtime_${Date.now()}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'ads_config',
+          },
+          async (payload) => {
+            const updated = await this.fetchAdsConfig();
+            callback(updated);
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'ads_settings',
+            filter: 'key=eq.ads_config',
+          },
+          async () => {
+            const updated = await this.fetchAdsConfig();
+            callback(updated);
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('prombo_ads_config_changed', localHandler);
+        }
+      };
+    } catch (err) {
+      console.warn('Failed to subscribe to ads config realtime channel:', err);
+      return () => {
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('prombo_ads_config_changed', localHandler);
+        }
+      };
+    }
+  },
+
   recordFeedAdClick(slotId: string): number {
     try {
       const config = this.getAdsConfig();
@@ -1567,9 +1667,6 @@ export const StorageService = {
     return 0;
   },
 
-  /**
-   * Resets feed ad clicks (for a single slot or all 20 slots)
-   */
   resetFeedAdClicks(slotId?: string): void {
     try {
       const config = this.getAdsConfig();
@@ -1601,9 +1698,6 @@ export const StorageService = {
     }
   },
 
-  /**
-   * Normalizes slot key aliases to standard AdSlotId
-   */
   normalizeGlobalSlotId(slotKey: string): AdSlotId | null {
     if (!slotKey) return null;
     const clean = slotKey.trim();
@@ -1618,9 +1712,6 @@ export const StorageService = {
     return null;
   },
 
-  /**
-   * Safely records and increments click count for any global ad slot
-   */
   recordGlobalAdClick(slotKey: string): number {
     try {
       const config = this.getAdsConfig();
@@ -1644,9 +1735,6 @@ export const StorageService = {
     return 0;
   },
 
-  /**
-   * Resets global ad clicks (for a single slot or all global slots)
-   */
   resetGlobalAdClicks(slotKey?: string): void {
     try {
       const config = this.getAdsConfig();
@@ -1691,7 +1779,6 @@ export const StorageService = {
     return config;
   },
 
-  // BACKUP & EXPORT / IMPORT
   exportBackupJSON(): string {
     const data = {
       version: '1.1',
@@ -1716,7 +1803,6 @@ export const StorageService = {
         return { success: false, message: 'Invalid backup file: prompts and categories arrays are required' };
       }
 
-      // Schema validation and sanitization for prompts
       const validatedPrompts: Prompt[] = data.prompts
         .filter((p: any) => p && typeof p === 'object' && typeof p.title === 'string' && typeof p.prompt === 'string')
         .map((p: any) => ({
@@ -1743,7 +1829,6 @@ export const StorageService = {
           updatedAt: String(p.updatedAt || new Date().toISOString()),
         }));
 
-      // Schema validation and sanitization for categories
       const validatedCategories: Category[] = data.categories
         .filter((c: any) => c && typeof c === 'object' && typeof c.id === 'string' && typeof c.name === 'string')
         .map((c: any) => ({
