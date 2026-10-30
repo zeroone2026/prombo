@@ -127,14 +127,25 @@ export const CommunityService = {
    * Specifically filtered by `{ key: 'community_config' }`
    */
   async fetchSiteSettings(): Promise<SiteSettings> {
+    console.log('%c[PROMBOT_DEBUG] CommunityService.fetchSiteSettings() -> execution started', 'background: #4f46e5; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;');
     const supabase = getSupabaseClient();
+    const isConfigured = Boolean(supabase && isSupabaseConfigured());
+    console.log('%c[PROMBOT_DEBUG] CommunityService.fetchSiteSettings() -> Supabase configured status:', 'color: #4f46e5; font-weight: bold;', { isConfigured });
+
     if (supabase && isSupabaseConfigured()) {
       try {
+        console.log('%c[PROMBOT_DEBUG] CommunityService.fetchSiteSettings() -> Querying table "site_settings" where key = "community_config"', 'color: #4f46e5; font-weight: bold;');
         const { data, error } = await supabase
           .from('site_settings')
           .select('value')
           .eq('key', 'community_config')
           .maybeSingle();
+
+        console.log('%c[PROMBOT_DEBUG] CommunityService.fetchSiteSettings() -> Supabase response:', 'color: #4f46e5; font-weight: bold;', { data, error });
+
+        if (error) {
+          console.error('%c[PROMBOT_DEBUG] CommunityService.fetchSiteSettings() -> Supabase query error:', 'background: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', error);
+        }
 
         if (!error && data && data.value) {
           const parsedValue = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
@@ -143,27 +154,36 @@ export const CommunityService = {
             ...parsedValue,
           };
           safeStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+          console.log('%c[PROMBOT_DEBUG] CommunityService.fetchSiteSettings() -> Parsed & stored in safeStorage:', 'background: #16a34a; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', merged);
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('prombo_community_settings_change', { detail: merged }));
           }
           return merged;
+        } else {
+          console.log('%c[PROMBOT_DEBUG] CommunityService.fetchSiteSettings() -> No data record found in Supabase (or value empty).', 'background: #d97706; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;');
         }
       } catch (err) {
-        console.warn('Failed to fetch site settings from Supabase:', err);
+        console.error('%c[PROMBOT_DEBUG] CommunityService.fetchSiteSettings() -> Exception during fetch:', 'background: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', err);
       }
+    } else {
+      console.warn('%c[PROMBOT_DEBUG] CommunityService.fetchSiteSettings() -> Supabase not configured, skipping remote query', 'background: #d97706; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;');
     }
-    return this.getSiteSettings();
+    const localFallback = this.getSiteSettings();
+    console.log('%c[PROMBOT_DEBUG] CommunityService.fetchSiteSettings() -> Returning local settings:', 'color: #4f46e5; font-weight: bold;', localFallback);
+    return localFallback;
   },
 
   /**
    * Subscribe to live postgres_changes for `site_settings` table where key = 'community_config'
    */
   subscribeToSiteSettings(callback: (settings: SiteSettings) => void): () => void {
+    console.log('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> Setting up subscription listener', 'background: #7c3aed; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;');
     const supabase = getSupabaseClient();
 
     // Local in-browser event listener for zero-latency local updates
     const localHandler = (e: any) => {
       if (e.detail) {
+        console.log('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> In-browser custom event "prombo_community_settings_change" received:', 'color: #7c3aed; font-weight: bold;', e.detail);
         callback(e.detail);
       }
     };
@@ -172,6 +192,7 @@ export const CommunityService = {
     }
 
     if (!supabase || !isSupabaseConfigured()) {
+      console.warn('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> Supabase not configured, Realtime disabled (local custom events only)', 'background: #d97706; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;');
       return () => {
         if (typeof window !== 'undefined') {
           window.removeEventListener('prombo_community_settings_change', localHandler);
@@ -180,8 +201,11 @@ export const CommunityService = {
     }
 
     try {
+      const channelName = `site_settings_realtime_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      console.log('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> Creating Supabase channel:', 'color: #7c3aed; font-weight: bold;', channelName);
+
       const channel = supabase
-        .channel(`site_settings_realtime_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`)
+        .channel(channelName)
         .on(
           'postgres_changes',
           {
@@ -191,6 +215,11 @@ export const CommunityService = {
             filter: 'key=eq.community_config',
           },
           async (payload) => {
+            console.log('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> postgres_changes event triggered!', 'background: #9333ea; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', {
+              eventType: payload.eventType,
+              new: payload.new,
+              old: payload.old,
+            });
             const newRecord = payload.new as any;
             if (newRecord?.value) {
               const remoteVal = typeof newRecord.value === 'string' ? JSON.parse(newRecord.value) : newRecord.value;
@@ -198,27 +227,39 @@ export const CommunityService = {
                 ...DEFAULT_SITE_SETTINGS,
                 ...remoteVal,
               };
+              console.log('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> Parsed payload.new.value:', 'background: #16a34a; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', merged);
               safeStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
               callback(merged);
               if (typeof window !== 'undefined') {
                 window.dispatchEvent(new CustomEvent('prombo_community_settings_change', { detail: merged }));
               }
             } else {
+              console.log('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> payload.new has no value field, falling back to fetchSiteSettings()', 'color: #9333ea; font-weight: bold;');
               const updated = await this.fetchSiteSettings();
               callback(updated);
             }
           }
         )
-        .subscribe();
+        .subscribe((status, err) => {
+          console.log('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> Realtime channel status update:', 'background: #7c3aed; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', {
+            channel: channelName,
+            status,
+            error: err,
+          });
+          if (err) {
+            console.error('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> Realtime channel error:', 'background: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', err);
+          }
+        });
 
       return () => {
+        console.log('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> Unsubscribing channel:', 'color: #7c3aed; font-weight: bold;', channelName);
         supabase.removeChannel(channel);
         if (typeof window !== 'undefined') {
           window.removeEventListener('prombo_community_settings_change', localHandler);
         }
       };
     } catch (err) {
-      console.warn('Failed to subscribe to site settings realtime channel:', err);
+      console.error('%c[PROMBOT_DEBUG] CommunityService.subscribeToSiteSettings() -> Exception setting up subscription:', 'background: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', err);
       return () => {
         if (typeof window !== 'undefined') {
           window.removeEventListener('prombo_community_settings_change', localHandler);
@@ -231,22 +272,55 @@ export const CommunityService = {
    * Save Site Settings
    */
   async updateSiteSettings(settings: Partial<SiteSettings>): Promise<SiteSettings> {
+    console.log('%c[PROMBOT_DEBUG] CommunityService.updateSiteSettings() -> Incoming payload:', 'background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', settings);
     const current = this.getSiteSettings();
+    console.log('%c[PROMBOT_DEBUG] CommunityService.updateSiteSettings() -> Current settings before update:', 'color: #0284c7; font-weight: bold;', current);
     const updated: SiteSettings = { ...current, ...settings };
     safeStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(updated));
+    console.log('%c[PROMBOT_DEBUG] CommunityService.updateSiteSettings() -> Saved to safeStorage:', 'color: #0284c7; font-weight: bold;', updated);
 
     // Sync to Supabase `site_settings`
     const supabase = getSupabaseClient();
+    const isConfigured = Boolean(supabase && isSupabaseConfigured());
+    console.log('%c[PROMBOT_DEBUG] CommunityService.updateSiteSettings() -> Supabase client configured:', 'color: #0284c7; font-weight: bold;', isConfigured);
+
     if (supabase && isSupabaseConfigured()) {
+      const upsertRecord = {
+        key: 'community_config',
+        value: updated,
+        updated_at: new Date().toISOString(),
+      };
+      console.log('%c[PROMBOT_DEBUG] CommunityService.updateSiteSettings() -> Exact parameters sent to Supabase "site_settings" upsert:', 'background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', {
+        table: 'site_settings',
+        onConflict: 'key',
+        payload: [upsertRecord],
+      });
+
       try {
-        await supabase
+        const { data, error } = await supabase
           .from('site_settings')
-          .upsert([{ key: 'community_config', value: updated, updated_at: new Date().toISOString() }], { onConflict: 'key' });
+          .upsert([upsertRecord], { onConflict: 'key' })
+          .select();
+
+        if (error) {
+          console.error('%c[PROMBOT_DEBUG] CommunityService.updateSiteSettings() -> Supabase returned database error:', 'background: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', {
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+            code: error.code,
+            rawError: error,
+          });
+        } else {
+          console.log('%c[PROMBOT_DEBUG] CommunityService.updateSiteSettings() -> Supabase upsert SUCCESS:', 'background: #16a34a; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', { data });
+        }
       } catch (err) {
-        console.warn('Failed to sync site settings to Supabase', err);
+        console.error('%c[PROMBOT_DEBUG] CommunityService.updateSiteSettings() -> Exception during Supabase upsert call:', 'background: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', err);
       }
+    } else {
+      console.warn('%c[PROMBOT_DEBUG] CommunityService.updateSiteSettings() -> Supabase not configured, updated locally only', 'background: #d97706; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;');
     }
 
+    console.log('%c[PROMBOT_DEBUG] CommunityService.updateSiteSettings() -> Dispatching window event "prombo_community_settings_change":', 'color: #0284c7; font-weight: bold;', updated);
     window.dispatchEvent(new CustomEvent('prombo_community_settings_change', { detail: updated }));
     return updated;
   },
