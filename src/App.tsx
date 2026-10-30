@@ -305,6 +305,12 @@ function MainApp() {
         }
       }).catch(() => {});
 
+      StorageService.fetchAdsConfig().then((remoteAds) => {
+        if (remoteAds) {
+          setAdsConfig(remoteAds);
+        }
+      }).catch(() => {});
+
       CommunityService.fetchSiteSettings().then((remoteSiteSettings) => {
         if (remoteSiteSettings) {
           console.log('%c[PROMBOT_DEBUG] App.tsx (mount effect) -> Initial fetch returned data. Calling setSiteSettings:', 'background: #0d9488; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', remoteSiteSettings);
@@ -328,6 +334,11 @@ function MainApp() {
       }
     });
 
+    // Subscribe to ads config realtime sync across the entire app
+    const unsubscribeAdsConfig = StorageService.subscribeToAdsConfig((newAds) => {
+      setAdsConfig(newAds);
+    });
+
     // Subscribe to site settings (community switch) realtime sync across all connected clients
     const unsubscribeSiteSettings = CommunityService.subscribeToSiteSettings((newSiteSettings) => {
       console.log('%c[PROMBOT_DEBUG] App.tsx (Realtime subscription listener) -> Received newSiteSettings. Calling setSiteSettings:', 'background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', newSiteSettings);
@@ -336,6 +347,7 @@ function MainApp() {
 
     return () => {
       unsubscribePlatformSettings();
+      unsubscribeAdsConfig();
       unsubscribeSiteSettings();
     };
   }, []);
