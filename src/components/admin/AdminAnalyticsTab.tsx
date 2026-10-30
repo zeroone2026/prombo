@@ -251,6 +251,10 @@ export const AdminAnalyticsTab: React.FC<AdminAnalyticsTabProps> = ({
   const handleToggleCommunitySwitch = async () => {
     setIsTogglingSwitch(true);
     const newValue = !siteSettings.communityEnabled;
+    console.log('%c[PROMBOT_DEBUG] AdminAnalyticsTab -> Admin clicked Community toggle switch:', 'background: #db2777; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;', {
+      previousValue: siteSettings.communityEnabled,
+      newValue,
+    });
     await onUpdateSiteSettings({ communityEnabled: newValue });
     setIsTogglingSwitch(false);
     onShowToast(
