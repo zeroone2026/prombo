@@ -415,7 +415,11 @@ export const StorageService = {
         }
 
         const currentUser = AuthService.getCurrentUser();
-        if (currentUser?.id) {
+        const isValidUuid = (val: any) =>
+          typeof val === 'string' &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(val);
+
+        if (currentUser?.id && isValidUuid(currentUser.id)) {
           // Fetch active posts, and also pending posts belonging to the current user so they don't vanish
           query = query.or(`status.eq.active,user_id.eq.${currentUser.id}`);
         } else {
@@ -1565,6 +1569,7 @@ export const StorageService = {
         (async () => {
           try {
             const payload = {
+              id: 'default',
               key: 'default',
               value: config,
               updated_at: new Date().toISOString(),
