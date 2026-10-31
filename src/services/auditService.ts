@@ -177,6 +177,12 @@ function mapEntryToRow(entry: AuditLogEntry): Record<string, any> {
 }
 
 export const AuditService = {
+  isRlsBlocked: false,
+
+  resetRlsState(): void {
+    this.isRlsBlocked = false;
+  },
+
   /**
    * Read audit logs from local cache (with fallback to seeds)
    */
@@ -284,12 +290,22 @@ export const AuditService = {
 
     // 5. Asynchronously persist to Supabase `audit_logs` table
     const supabase = getSupabaseClient();
-    if (supabase) {
+    if (supabase && !this.isRlsBlocked) {
       try {
         const rowPayload = mapEntryToRow(newEntry);
         const { error: sbError } = await supabase.from('audit_logs').insert([rowPayload]);
         if (sbError) {
-          console.warn('Supabase audit_logs insert notice (will use local fallback):', sbError.message);
+          if (
+            sbError.code === '42501' ||
+            (sbError as any).status === 403 ||
+            sbError.message?.toLowerCase().includes('row-level security') ||
+            sbError.message?.toLowerCase().includes('permission denied')
+          ) {
+            this.isRlsBlocked = true;
+            console.info('[AuditService] Supabase audit_logs is RLS-protected (403 Forbidden). Persisting audit logs to local cache.');
+          } else {
+            console.warn('Supabase audit_logs insert notice (will use local fallback):', sbError.message);
+          }
         }
       } catch (err: any) {
         console.warn('Supabase audit_logs sync exception:', err?.message || err);
@@ -342,6 +358,16 @@ export const AuditService = {
             }
           }
           mergedLogs = Array.from(map.values());
+        } else if (error) {
+          if (
+            error.code === '42501' ||
+            (error as any).status === 403 ||
+            error.message?.toLowerCase().includes('row-level security')
+          ) {
+            // Silently fallback to local store for non-admin requests
+          } else {
+            console.warn('Supabase fetch audit_logs exception, using local store:', error.message);
+          }
         }
       } catch (e) {
         console.warn('Supabase fetch audit_logs exception, using local store:', e);
