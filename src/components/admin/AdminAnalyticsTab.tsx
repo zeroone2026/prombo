@@ -117,20 +117,40 @@ CREATE TABLE IF NOT EXISTS public.page_analytics (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 7. PERFORMANCE INDEXES
+-- 7. AUDIT LOGS TABLE
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  user_id TEXT,
+  user_name TEXT NOT NULL,
+  user_email TEXT,
+  user_avatar TEXT,
+  user_slug TEXT,
+  user_profile_url TEXT NOT NULL,
+  target_id TEXT,
+  target_type TEXT NOT NULL,
+  target_title TEXT NOT NULL,
+  content_url TEXT NOT NULL,
+  details JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 8. PERFORMANCE INDEXES
 CREATE INDEX IF NOT EXISTS idx_community_posts_parent ON public.community_posts(parent_id);
 CREATE INDEX IF NOT EXISTS idx_community_posts_prompt ON public.community_posts(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_community_posts_created ON public.community_posts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_post_likes_post ON public.post_likes(post_id);
 CREATE INDEX IF NOT EXISTS idx_analytics_created ON public.page_analytics(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_analytics_type ON public.page_analytics(event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON public.audit_logs(created_at DESC);
 
--- 8. ROW LEVEL SECURITY (RLS) POLICIES
+-- 9. ROW LEVEL SECURITY (RLS) POLICIES
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.community_posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.post_likes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.page_analytics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS BOOLEAN AS $$
@@ -185,7 +205,12 @@ CREATE POLICY "Analytics can be logged by anyone"
 CREATE POLICY "Analytics are viewable by admins" 
   ON public.page_analytics FOR SELECT USING (public.is_admin());
 
--- 9. PROFILE AUTO-CREATION TRIGGER
+CREATE POLICY "Audit logs can be logged by anyone or system" 
+  ON public.audit_logs FOR INSERT WITH CHECK (true);
+CREATE POLICY "Audit logs are viewable by admins" 
+  ON public.audit_logs FOR SELECT USING (public.is_admin());
+
+-- 10. PROFILE AUTO-CREATION TRIGGER
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
