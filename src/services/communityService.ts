@@ -641,28 +641,68 @@ export const CommunityService = {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('community_posts').insert([
-          {
-            id: newPostId,
-            user_id: activeSession.id,
-            user_name: activeSession.name || 'Member',
-            user_email: activeSession.email || null,
-            user_avatar: activeSession.avatar || null,
-            prompt_id: params.promptId || null,
-            prompt_title: params.promptTitle || null,
-            prompt_category: params.promptCategory || null,
-            prompt_model: params.promptModel || null,
-            content: params.content.trim(),
-            parent_id: params.parentId || null,
-            images: params.images || [],
-            videos: params.videos || [],
-            video_url: params.videoUrl || null,
-            media_type: newPost.mediaType || 'none',
-            status: initialStatus,
-          },
-        ]);
+        const isValidUuid = (val: any) =>
+          typeof val === 'string' &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(val);
+
+        // Resolve valid UUID for user_id to satisfy foreign key and uuid column type
+        let dbUserId: string | null = null;
+        try {
+          const { data: sessionData } = await supabase.auth.getSession();
+          if (sessionData?.session?.user?.id && isValidUuid(sessionData.session.user.id)) {
+            dbUserId = sessionData.session.user.id;
+          }
+        } catch {}
+
+        if (!dbUserId && isValidUuid(activeSession.id)) {
+          dbUserId = activeSession.id;
+        }
+
+        // Map status to match PostgreSQL CHECK constraint: CHECK (status IN ('active', 'hidden', 'deleted'))
+        const dbStatus =
+          initialStatus === 'pending'
+            ? 'hidden'
+            : ['active', 'hidden', 'deleted'].includes(initialStatus)
+            ? initialStatus
+            : 'active';
+
+        // Exact schema-matched payload for public.community_posts
+        const standardPayload: Record<string, any> = {
+          id: newPostId,
+          user_id: dbUserId,
+          user_name: activeSession.name || 'Member',
+          user_email: activeSession.email || null,
+          user_avatar: activeSession.avatar || null,
+          prompt_id: params.promptId || null,
+          content: params.content.trim(),
+          parent_id: params.parentId || null,
+          likes_count: 0,
+          replies_count: 0,
+          is_pinned: false,
+          status: dbStatus,
+          created_at: now,
+          updated_at: now,
+        };
+
+        const { error: insertError } = await supabase
+          .from('community_posts')
+          .insert([standardPayload]);
+
+        if (insertError) {
+          console.warn('[communityService] community_posts insert notice:', insertError.message);
+          // If foreign key constraint failed on user_id (e.g. user_id does not exist in profiles), retry with user_id: null
+          if (
+            insertError.code === '23503' ||
+            insertError.message?.toLowerCase().includes('user_id') ||
+            insertError.message?.toLowerCase().includes('foreign key')
+          ) {
+            await supabase
+              .from('community_posts')
+              .insert([{ ...standardPayload, user_id: null }]);
+          }
+        }
       } catch (err) {
-        console.warn('Supabase post insert failed', err);
+        console.warn('Supabase post insert exception:', err);
       }
     }
 
@@ -899,10 +939,18 @@ export const CommunityService = {
             if (mediaUpdates.videoUrl !== undefined) updatePayload.video_url = mediaUpdates.videoUrl;
             if (mediaUpdates.mediaType !== undefined) updatePayload.media_type = mediaUpdates.mediaType;
           }
-          await supabase
+          const { error: updateError } = await supabase
             .from('community_posts')
             .update(updatePayload)
             .eq('id', postId);
+
+          if (updateError) {
+            // Fallback to standard columns if media columns are not present in schema
+            await supabase
+              .from('community_posts')
+              .update({ content: trimmed, updated_at: now })
+              .eq('id', postId);
+          }
         } catch (err) {
           console.warn('Supabase editPost failed', err);
         }
